@@ -1,0 +1,4 @@
+.esphome/
+*.bin
+*.elf
+*.map
