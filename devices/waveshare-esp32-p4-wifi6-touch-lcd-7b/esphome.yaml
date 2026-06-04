@@ -1,0 +1,21 @@
+# =============================================================================
+# ESPHOME ENTRY POINT - Waveshare ESP32-P4-WIFI6-Touch-LCD-7B
+# =============================================================================
+# User-facing config file. Set your device name and WiFi credentials here.
+# =============================================================================
+
+substitutions:
+  name: "waveshare-7b"
+  friendly_name: "Waveshare 7B"
+  espcontrol_component_url: "https://github.com/mikescotland/espcontrol"
+  espcontrol_component_ref: "main"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+packages:
+  setup:
+    url: https://github.com/mikescotland/espcontrol/
+    file: devices/waveshare-esp32-p4-wifi6-touch-lcd-7b/packages.yaml
+    refresh: 1s
