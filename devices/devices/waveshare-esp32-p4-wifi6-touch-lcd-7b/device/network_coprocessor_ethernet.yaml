@@ -1,8 +1,0 @@
-# =============================================================================
-# NETWORK CO-PROCESSOR - Ethernet firmware variant
-# =============================================================================
-# Ethernet builds do not start the ESP32-C6 hosted WiFi co-processor.
-# =============================================================================
-
-substitutions:
-  hosted_wifi_coprocessor: "disabled"
