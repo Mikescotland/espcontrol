@@ -6,9 +6,9 @@
 # =============================================================================
 
 substitutions:
-  device_slug: "waveshare-esp32-p4-wifi6-touch-lcd-7b"
-  firmware_manifest_slug: "waveshare-esp32-p4-wifi6-touch-lcd-7b"
-  firmware_version: "dev-waveshare-7b-20260605"
+  device_slug: "guition-esp32-p4-jc1060p470"
+  firmware_manifest_slug: "guition-esp32-p4-jc1060p470"
+  firmware_version: "dev-jc1060p470-20260526-alarmfix2"
 
   screen_width: "1024"
   screen_height: "600"
