@@ -58,6 +58,7 @@ espcontrol:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  compile_process_limit: 1
   platformio_options:
     build_flags:
       - "-Wno-deprecated-declarations"
