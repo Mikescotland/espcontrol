@@ -268,6 +268,10 @@ touchscreen:
     i2c_id: bus_a
     reset_pin: GPIO23
     update_interval: 50ms
+    transform:
+      mirror_x: true
+      mirror_y: true
+      swap_xy: false
     on_touch:
       - lambda: |-
           ESP_LOGI("touch", "Touch x=%d y=%d x_raw=%d y_raw=%d",
