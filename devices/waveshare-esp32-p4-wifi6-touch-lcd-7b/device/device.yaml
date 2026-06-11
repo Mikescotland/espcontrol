@@ -270,7 +270,6 @@ display:
   - platform: mipi_dsi
     id: my_display
     model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
-    rotation: 180
     update_interval: never
     auto_clear_enabled: false
     dimensions:
