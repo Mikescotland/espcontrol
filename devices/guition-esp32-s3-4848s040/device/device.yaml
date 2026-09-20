@@ -9,6 +9,7 @@
 substitutions:
   espcontrol_component_url: "https://github.com/jtenniswood/espcontrol"
   espcontrol_component_ref: "main"
+  mdi_font_file: "https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf"
 
 # ---------------------------------------------------------------------------
 # ESP32-S3 platform (16MB flash, ESP-IDF framework)
@@ -18,9 +19,16 @@ esp32:
   flash_size: 16MB
   framework:
     type: esp-idf
-    version: 5.5.2
-    source: https://github.com/pioarduino/esp-idf/releases/download/v5.5.2/esp-idf-v5.5.2.tar.xz
-    platform_version: 55.03.37
+    # stick to recommended version, currently 5.5.4, 55.03.39 with tool-esptoolpy 5.3.0. No issues
+    #version: 5.5.2
+    # pioarduino 55.03.38-1 pulls tool-esptoolpy 5.2.0, which can install
+    # incompletely in ESPHome containers and then fail while creating .bin files.
+    #platform_version: 55.03.37
+    advanced:
+      # The clock/cover-art display controller uses a deep ESPHome action chain.
+      # Keep enough headroom for rapid presence-driven sleep/wake transitions;
+      # the 8 KiB default can overflow loopTask on this profile.
+      loop_task_stack_size: 16384
     sdkconfig_options:
       # The S3 display stack leaves little internal RAM for HTTPS OTA checks.
       # Allocate mbedTLS buffers from PSRAM so firmware downloads can connect.
@@ -32,6 +40,21 @@ esp32:
       # and LVGL buffers are initialized.
       CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM: "8"
       CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: "y"
+      # Route ordinary allocations larger than 4 KiB to PSRAM while keeping
+      # a 32 KiB internal reserve for DMA and cache-disabled operations.
+      CONFIG_SPIRAM_USE_MALLOC: "y"
+      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "4096"
+      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "32768"
+      # RGB bounce-buffer scan-out requires 64-byte data-cache lines. The
+      # default 32-byte lines can desynchronise PSRAM reads from panel DMA and
+      # leave the whole display vertically shifted until the next restart.
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      # The RGB driver already restarts after a genuine DMA underflow. Restarting
+      # on every VSYNC can instead shift the framebuffer by one bounce-buffer block.
+      CONFIG_LCD_RGB_RESTART_IN_VSYNC: "n"
+      CONFIG_LCD_RGB_ISR_IRAM_SAFE: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_SPIRAM_RODATA: "y"
 
 # ---------------------------------------------------------------------------
 # External component
@@ -42,11 +65,35 @@ external_components:
       url: ${espcontrol_component_url}
       ref: ${espcontrol_component_ref}
       path: components
-    components: [espcontrol, web_server_idf, artwork_image]
+    components: [espcontrol, web_server_idf, artwork_image, mipi_rgb]
     refresh: 1s
 
 espcontrol:
-
+  id: espcontrol_app
+  panel_config:
+    device_profile: ${device_slug}
+    storage: card_images
+    button_order: button_order
+    button_on_color: button_on_color
+    buttons:
+      - config: button_1_config
+        subpage_chunks: [subpage_1_config, subpage_1_config_ext, subpage_1_config_ext_2, subpage_1_config_ext_3]
+      - config: button_2_config
+        subpage_chunks: [subpage_2_config, subpage_2_config_ext, subpage_2_config_ext_2, subpage_2_config_ext_3]
+      - config: button_3_config
+        subpage_chunks: [subpage_3_config, subpage_3_config_ext, subpage_3_config_ext_2, subpage_3_config_ext_3]
+      - config: button_4_config
+        subpage_chunks: [subpage_4_config, subpage_4_config_ext, subpage_4_config_ext_2, subpage_4_config_ext_3]
+      - config: button_5_config
+        subpage_chunks: [subpage_5_config, subpage_5_config_ext, subpage_5_config_ext_2, subpage_5_config_ext_3]
+      - config: button_6_config
+        subpage_chunks: [subpage_6_config, subpage_6_config_ext, subpage_6_config_ext_2, subpage_6_config_ext_3]
+      - config: button_7_config
+        subpage_chunks: [subpage_7_config, subpage_7_config_ext, subpage_7_config_ext_2, subpage_7_config_ext_3]
+      - config: button_8_config
+        subpage_chunks: [subpage_8_config, subpage_8_config_ext, subpage_8_config_ext_2, subpage_8_config_ext_3]
+      - config: button_9_config
+        subpage_chunks: [subpage_9_config, subpage_9_config_ext, subpage_9_config_ext_2, subpage_9_config_ext_3]
 # ---------------------------------------------------------------------------
 # ESPHome core (device name from substitutions)
 # ---------------------------------------------------------------------------
@@ -60,10 +107,14 @@ espcontrol:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  platformio_options:
-    build_flags:
-      - "-DESPCONTROL_DISABLE_TODO=1"
-      - "-DESPCONTROL_MAX_GRID_SLOTS=9"
+  build_flags:
+    - "-DESPCONTROL_MAX_GRID_SLOTS=9"
+    - "-DESPCONTROL_LOW_HEAP_MEDIA_CONTROL=1"
+    - "-DESPCONTROL_LOW_HEAP_COVER_ART=1"
+    - "-DESPCONTROL_DISABLE_WEATHER_FORECAST=1"
+    # Keep C++ literals close to their functions on the S3 firmware image;
+    # the modal code is large enough to otherwise trip Xtensa l32r range limits.
+    - "-mtext-section-literals"
   on_boot:
     - priority: 800
       then:
@@ -118,6 +169,7 @@ esphome:
       then:
         - lambda: 'id(screen_rotation_ready) = true;'
         - script.execute: apply_screen_rotation
+        - script.execute: clock_bar_apply
 
 # ---------------------------------------------------------------------------
 # PSRAM (video frame buffer memory)
@@ -203,6 +255,9 @@ output:
   - platform: ledc
     pin: GPIO38
     id: gpio_backlight_pwm
+    # The 4848S040 backlight driver needs a low PWM rate; high rates make
+    # brightness levels below roughly 85% appear off on some boards. Keep the
+    # pulses long, but avoid the more visible shimmer seen at 100Hz.
     frequency: 150Hz
     min_power: 0.01
     zero_means_zero: true
@@ -221,27 +276,31 @@ light:
         - if:
             condition:
               lambda: |-
-                return id(screen_schedule_asleep) ||
-                       (id(schedule_enabled).state && !panel_time_or_fallback(id(panel_time).now(), id(homeassistant_time).now()).is_valid());
+                auto now = panel_time_or_fallback(id(panel_time).now(), id(homeassistant_time).now());
+                return (id(espcontrol_app).display().target_source_is(
+                            espcontrol::DisplayRequestSource::SCREEN_SCHEDULE) &&
+                        id(espcontrol_app).display().target_mode_is(
+                            espcontrol::DisplayMode::DISPLAY_OFF)) ||
+                       screen_schedule_waiting_for_time(
+                         id(screen_schedule_trigger).state,
+                         id(schedule_enabled).state,
+                         now.is_valid());
             then:
               - script.execute: backlight_force_display_off
             else:
               - if:
                   condition:
-                    lambda: 'return id(screensaver_display_off_active);'
+                    lambda: |-
+                      return id(espcontrol_app).display().current_mode_is(
+                          espcontrol::DisplayMode::DISPLAY_OFF);
                   then:
                     - script.execute: screensaver_wake
     on_turn_off:
       then:
-        - if:
-            condition:
-              lambda: |-
-                return !id(display_asleep) &&
-                       !id(screen_schedule_asleep) &&
-                       !id(screensaver_display_off_active) &&
-                       !id(screensaver_dimmed_active);
-            then:
-              - script.execute: screen_schedule_manual_sleep
+        - script.execute: display_backlight_handle_off
+    on_state:
+      then:
+        - script.execute: display_backlight_handle_state
 
 # ---------------------------------------------------------------------------
 # Built-in relays (4848S040C relay variant)
@@ -312,6 +371,18 @@ button:
       then:
         - script.execute: relay_3_push
 
+  - platform: template
+    name: Backlight Sweep Test
+    internal: true
+    disabled_by_default: true
+    entity_category: diagnostic
+    icon: mdi:brightness-percent
+    web_server:
+      sorting_group_id: sg_brightness
+    on_press:
+      then:
+        - script.execute: s3_backlight_sweep_test
+
 # ---------------------------------------------------------------------------
 # SPI bus (used by MIPI RGB driver for ST7701S init sequence)
 # ---------------------------------------------------------------------------
@@ -338,6 +409,8 @@ touchscreen:
       mirror_x: false
       mirror_y: false
     on_touch:
+      - script.execute: cover_art_pause_after_touch
+      - script.wait: cover_art_pause_after_touch
       - script.execute: screensaver_wake
 
 # ---------------------------------------------------------------------------
@@ -350,7 +423,10 @@ display:
     # Start WiFi before the RGB panel allocates its frame buffers; otherwise the
     # WiFi driver can fail to claim enough internal RX buffers on fresh boots.
     setup_priority: 240
-    pclk_frequency: 8MHz
+    # Keep the S3 RGB clock conservative while lifting the panel scan rate above
+    # the visibly shimmery 8MHz setting. Higher clocks have caused screen shifts
+    # and pixel breakup when WiFi, flash, and web traffic compete for PSRAM.
+    pclk_frequency: 10MHz
     update_interval: never
     auto_clear_enabled: False
     # Keep the ST7701S panel init sequence on the non-mirrored path. The
@@ -367,7 +443,11 @@ lvgl:
   id: main_lvgl
   # Keep LVGL after WiFi and after the display driver.
   setup_priority: 230
-  buffer_size: 12%
+  # A full-frame buffer avoids splitting page redraws into many small regions.
+  # At 90/270 degrees ESPHome rotates each rendered region in software; one
+  # full-frame rotation is substantially cheaper than repeatedly rotating the
+  # same page in partial chunks on the S3's PSRAM-backed display stack.
+  buffer_size: 100%
   displays: my_display
   rotation: 180
   touchscreens:
@@ -395,6 +475,51 @@ script:
       - switch.turn_on: relay_3
       - delay: 200ms
       - switch.turn_off: relay_3
+
+  - id: s3_backlight_sweep_test
+    mode: restart
+    then:
+      - script.execute: screensaver_wake
+      - script.wait: screensaver_wake
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 1.0
+      - light.turn_on:
+          id: display_backlight
+          brightness: 100%
+          transition_length: 0s
+      - delay: 3s
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 0.6
+      - light.turn_on:
+          id: display_backlight
+          brightness: 60%
+          transition_length: 0s
+      - delay: 3s
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 0.3
+      - light.turn_on:
+          id: display_backlight
+          brightness: 30%
+          transition_length: 0s
+      - delay: 3s
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 0.1
+      - light.turn_on:
+          id: display_backlight
+          brightness: 10%
+          transition_length: 0s
+      - delay: 3s
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 1.0
+      - light.turn_on:
+          id: display_backlight
+          brightness: 100%
+          transition_length: 0s
 
   - id: apply_screen_rotation
     then:
@@ -441,3 +566,4 @@ select:
               lambda: 'return id(screen_rotation_ready);'
             then:
               - script.execute: apply_screen_rotation
+              - script.execute: clock_bar_apply

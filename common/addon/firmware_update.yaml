@@ -29,9 +29,12 @@ esphome:
               - if:
                   condition:
                     lambda: |-
-                      return id(screen_schedule_asleep) ||
-                             (id(schedule_enabled).state &&
-                              !panel_time_or_fallback(id(panel_time).now(), id(homeassistant_time).now()).is_valid());
+                      auto now = panel_time_or_fallback(id(panel_time).now(), id(homeassistant_time).now());
+                      return id(espcontrol_app).display().target_schedule_inactive() ||
+                             screen_schedule_waiting_for_time(
+                               id(screen_schedule_trigger).state,
+                               id(schedule_enabled).state,
+                               now.is_valid());
                   then:
                     - globals.set:
                         id: firmware_update_complete_pending
@@ -58,7 +61,7 @@ script:
     then:
       - script.stop: screensaver_idle_check
       - script.stop: home_screen_idle_check
-      - script.stop: setup_screen_dim
+      - script.execute: setup_screen_dim_cancel
       - lambda: |-
           media_volume_hide_modal();
           climate_control_hide_modal();
@@ -67,10 +70,14 @@ script:
           alarm_pin_hide_modal();
           network_status_hide_modal();
           lv_label_set_text(id(loading_status_icon), "${icon_progress_clock}");
-          lv_label_set_text(id(loading_status_title), "Installing update");
-          lv_label_set_text(id(loading_status_label), "Preparing the screen\nDo not power off");
+          lv_label_set_text(id(loading_status_title), espcontrol_i18n("Installing update"));
+          lv_label_set_text(id(loading_status_label), espcontrol_i18n("Preparing the screen\nDo not power off"));
       - lvgl.resume:
+      - script.execute: clock_bar_hide
       - lvgl.page.show: loading_page
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 0.9
       - light.turn_on:
           id: display_backlight
           brightness: 90%
@@ -85,23 +92,31 @@ script:
           value: 'false'
       - lambda: |-
           lv_label_set_text(id(loading_status_icon), "${icon_progress_clock}");
-          lv_label_set_text(id(loading_status_title), "Installing update");
-          lv_label_set_text(id(loading_status_label), "The screen may turn off\nDo not power off");
+          lv_label_set_text(id(loading_status_title), espcontrol_i18n("Installing update"));
+          lv_label_set_text(id(loading_status_label), espcontrol_i18n("The screen may turn off\nDo not power off"));
       - lvgl.resume:
+      - script.execute: clock_bar_hide
       - lvgl.page.show: loading_page
+      # Expected during firmware writes: blanking the backlight reduces power
+      # and avoids drawing while flash is busy. Do not treat this as a modal
+      # screensaver blank.
       - script.execute: backlight_force_display_off
       - script.wait: backlight_force_display_off
 
   - id: show_update_complete_next_boot
     mode: single
     then:
-      - script.stop: setup_screen_dim
+      - script.execute: setup_screen_dim_cancel
       - lambda: |-
           lv_label_set_text(id(loading_status_icon), "${icon_check}");
-          lv_label_set_text(id(loading_status_title), "Update complete");
-          lv_label_set_text(id(loading_status_label), "Restarting display");
+          lv_label_set_text(id(loading_status_title), espcontrol_i18n("Update complete"));
+          lv_label_set_text(id(loading_status_label), espcontrol_i18n("Restarting display"));
       - lvgl.resume:
+      - script.execute: clock_bar_hide
       - lvgl.page.show: loading_page
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 0.9
       - light.turn_on:
           id: display_backlight
           brightness: 90%
@@ -111,6 +126,7 @@ script:
           id: firmware_update_complete_pending
           value: 'false'
       - lambda: 'global_preferences->sync();'
+      - script.execute: clock_bar_hide
       - lvgl.page.show: loading_page
 
   - id: show_update_failed
@@ -122,16 +138,41 @@ script:
       - lambda: |-
           global_preferences->sync();
           lv_label_set_text(id(loading_status_icon), "${icon_progress_clock}");
-          lv_label_set_text(id(loading_status_title), "Update failed");
-          lv_label_set_text(id(loading_status_label), "Try installing the update again");
+          lv_label_set_text(id(loading_status_title), espcontrol_i18n("Update failed"));
+          lv_label_set_text(id(loading_status_label), espcontrol_i18n("Try installing the update again"));
       - lvgl.resume:
+      - script.execute: clock_bar_hide
       - lvgl.page.show: loading_page
+      - script.execute:
+          id: backlight_note_internal_brightness
+          brightness: 0.9
       - light.turn_on:
           id: display_backlight
           brightness: 90%
           transition_length: 200ms
       - delay: 8s
       - script.execute: navigate_after_api
+
+  - id: firmware_install_update
+    mode: single
+    then:
+      - lambda: 'id(manual_check_only) = true;'
+      - component.update: firmware_update
+      - wait_until:
+          condition:
+            update.is_available: firmware_update
+          timeout: 30s
+      - if:
+          condition:
+            update.is_available: firmware_update
+          then:
+            - script.execute: show_update_starting
+            - script.wait: show_update_starting
+            - script.execute: show_update_writing
+            - script.wait: show_update_writing
+            - update.perform: firmware_update
+      - delay: 15s
+      - lambda: 'id(manual_check_only) = false;'
 
 update:
   - platform: http_request
@@ -220,20 +261,4 @@ button:
     web_server:
       sorting_group_id: sg_firmware
     on_press:
-      - lambda: 'id(manual_check_only) = true;'
-      - component.update: firmware_update
-      - wait_until:
-          condition:
-            update.is_available: firmware_update
-          timeout: 30s
-      - if:
-          condition:
-            update.is_available: firmware_update
-          then:
-            - script.execute: show_update_starting
-            - script.wait: show_update_starting
-            - script.execute: show_update_writing
-            - script.wait: show_update_writing
-            - update.perform: firmware_update
-      - delay: 15s
-      - lambda: 'id(manual_check_only) = false;'
+      - script.execute: firmware_install_update

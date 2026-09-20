@@ -40,14 +40,14 @@ lvgl:
                   text_align: center
               - label:
                   id: loading_status_title
-                  text: "Starting up"
+                  text: ""
                   text_font: $setup_title_font_id
                   text_color: 0xFFFFFF
                   width: $content_width
                   text_align: center
               - label:
                   id: loading_status_label
-                  text: "Booting"
+                  text: ""
                   text_font: $setup_body_font_id
                   text_color: 0xB0B0B0
                   width: $content_width
@@ -71,11 +71,11 @@ esphome:
     - priority: -200
       then:
         - lvgl.resume:
-        - lvgl.page.show: loading_page
+        - script.execute: clock_bar_hide
         - lambda: |-
-            lv_obj_add_flag(id(temperatures), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(id(display_time), LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(id(network_status_button), LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(id(loading_status_title), espcontrol_i18n("Starting up"));
+            lv_label_set_text(id(loading_status_label), espcontrol_i18n("Booting"));
+        - lvgl.page.show: loading_page
         - delay: 100ms
         - if:
             condition:
@@ -84,18 +84,37 @@ esphome:
                     wifi.connected:
                 - lambda: 'return !wifi::global_wifi_component->has_sta();'
             then:
+              - globals.set:
+                  id: connectivity_setup_display_active
+                  value: 'true'
+              - script.execute: display_mode_reconcile
+              - script.wait: display_mode_apply_transition
               - lambda: |-
-                  lv_label_set_text(id(loading_status_icon), "${icon_wifi}");
-                  lv_label_set_text(id(loading_status_title), "WiFi Setup");
-                  lv_label_set_text(id(loading_status_label), "Connect to WiFi\n${friendly_name}\nOpen 192.168.4.1");
+                  lv_label_set_text(id(loading_status_icon), "${icon_wifi_startup}");
+                  lv_label_set_text(id(loading_status_title), espcontrol_i18n("Configure your WiFi"));
+                  std::string hotspot_ssid = wifi::global_wifi_component->get_ap().get_ssid().str();
+                  if (hotspot_ssid.empty()) hotspot_ssid = "${friendly_name}";
+                  std::string msg = std::string(espcontrol_i18n_key("connect_to")) +
+                                    " '" + hotspot_ssid + "' " +
+                                    espcontrol_i18n_key("to_configure_your_network_settings");
+                  lv_label_set_display_text(id(loading_status_label), msg.c_str());
         - if:
             condition:
               lambda: |-
-                return id(screen_schedule_asleep) ||
-                       (id(schedule_enabled).state && !panel_time_or_fallback(id(panel_time).now(), id(homeassistant_time).now()).is_valid());
+                return wifi::global_wifi_component->has_sta() &&
+                       (id(espcontrol_app).display().target_schedule_inactive() ||
+                        screen_schedule_waiting_for_time(
+                          id(screen_schedule_trigger).state,
+                          id(schedule_enabled).state,
+                          panel_time_or_fallback(id(panel_time).now(), id(homeassistant_time).now()).is_valid()));
             then:
+              # Expected on boot when schedule logic says the panel should
+              # remain dark, or while time is not ready enough to decide.
               - script.execute: backlight_force_display_off
             else:
+              - script.execute:
+                  id: backlight_note_internal_brightness
+                  brightness: 0.9
               - light.turn_on:
                   id: display_backlight
                   brightness: 90%
@@ -107,7 +126,7 @@ esphome:
               lambda: 'return wifi::global_wifi_component->has_sta();'
             then:
               - lambda: |-
-                  lv_label_set_text(id(loading_status_label), "Connecting to WiFi");
+                  lv_label_set_text(id(loading_status_label), espcontrol_i18n("Connecting to WiFi"));
               - delay: 5s
               - lambda: 'id(boot_grace_period) = false;'
               - if:
@@ -126,4 +145,6 @@ esphome:
                           - script.execute: wifi_reconnect_flow
             else:
               - lambda: 'id(boot_grace_period) = false;'
-              - script.execute: wifi_show_hotspot_setup
+              # The loading page already contains the live hotspot name and
+              # connection instructions. Keep that proven-visible page active
+              # until WiFi connects instead of replacing it during late boot.

@@ -1,4 +1,9 @@
 import type { CardConfig, SavedConfigField } from "../contracts/types";
+import {
+  decodeConfigField,
+  encodeConfigField,
+  legacyButtonConfigSafe,
+} from "./config_primitives";
 
 export type DraftCardConfig = CardConfig & {
   _whenOnActive?: unknown;
@@ -70,30 +75,6 @@ export function cardConfigChanged(before: Partial<CardConfig>, after: Partial<Ca
     if ((before[field] || "") !== (after[field] || "")) return true;
   }
   return false;
-}
-
-export function trimConfigFields(fields: string[]): string[] {
-  while (fields.length > 1 && !fields[fields.length - 1]) fields.pop();
-  return fields;
-}
-
-export function encodeConfigField(value: string | number | boolean | null | undefined): string {
-  return String(value || "").replace(/[%,;|:]/g, (ch) => {
-    const hex = ch.charCodeAt(0).toString(16).toUpperCase();
-    return "%" + (hex.length < 2 ? "0" : "") + hex;
-  });
-}
-
-export function decodeConfigField(value: string | number | boolean | null | undefined): string {
-  return String(value || "").replace(/%([0-9a-fA-F]{2})/g, (_match, hex: string) => {
-    return String.fromCharCode(parseInt(hex, 16));
-  });
-}
-
-export function legacyButtonConfigSafe(fields: readonly string[]): boolean {
-  return fields.join(";").charAt(0) !== "~" && fields.every((field) => {
-    return String(field || "").indexOf(";") < 0;
-  });
 }
 
 export function parseRawButtonConfig(value: string | null | undefined): CardConfig {

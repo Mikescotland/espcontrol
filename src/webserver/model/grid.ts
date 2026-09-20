@@ -1,5 +1,49 @@
 export type SlotSizeMap = Record<string, number>;
 
+export const CARD_SIZE_SINGLE = 1;
+export const CARD_SIZE_TALL = 2;
+export const CARD_SIZE_WIDE = 3;
+export const CARD_SIZE_LARGE = 4;
+export const CARD_SIZE_EXTRA_TALL = 5;
+export const CARD_SIZE_EXTRA_WIDE = 6;
+export const CARD_SIZE_EXTRA_LARGE = 7;
+export const CARD_SIZE_MAX_WIDE = 8;
+export const CARD_SIZE_MAX_TALL = 9;
+export const CARD_SIZE_PORTRAIT_LARGE = 10;
+export const CARD_SIZE_LANDSCAPE_LARGE = 11;
+export const CARD_SIZE_ULTRA_WIDE = 12;
+
+export interface CardSizeDefinition {
+  size: number;
+  token: string;
+  rowSpan: number;
+  colSpan: number;
+  className: string;
+}
+
+const CARD_SIZE_SINGLE_DEFINITION: CardSizeDefinition = {
+  size: CARD_SIZE_SINGLE,
+  token: "",
+  rowSpan: 1,
+  colSpan: 1,
+  className: "",
+};
+
+export const CARD_SIZE_DEFINITIONS: readonly CardSizeDefinition[] = [
+  CARD_SIZE_SINGLE_DEFINITION,
+  { size: CARD_SIZE_TALL, token: "d", rowSpan: 2, colSpan: 1, className: "sp-btn-double" },
+  { size: CARD_SIZE_WIDE, token: "w", rowSpan: 1, colSpan: 2, className: "sp-btn-wide" },
+  { size: CARD_SIZE_LARGE, token: "b", rowSpan: 2, colSpan: 2, className: "sp-btn-big" },
+  { size: CARD_SIZE_EXTRA_TALL, token: "t", rowSpan: 3, colSpan: 1, className: "sp-btn-extra-tall" },
+  { size: CARD_SIZE_EXTRA_WIDE, token: "x", rowSpan: 1, colSpan: 3, className: "sp-btn-extra-wide" },
+  { size: CARD_SIZE_EXTRA_LARGE, token: "q", rowSpan: 3, colSpan: 3, className: "sp-btn-extra-large" },
+  { size: CARD_SIZE_MAX_WIDE, token: "h", rowSpan: 2, colSpan: 3, className: "sp-btn-max-wide" },
+  { size: CARD_SIZE_MAX_TALL, token: "v", rowSpan: 3, colSpan: 2, className: "sp-btn-max-tall" },
+  { size: CARD_SIZE_PORTRAIT_LARGE, token: "p", rowSpan: 4, colSpan: 3, className: "sp-btn-portrait-large" },
+  { size: CARD_SIZE_LANDSCAPE_LARGE, token: "l", rowSpan: 3, colSpan: 4, className: "sp-btn-landscape-large" },
+  { size: CARD_SIZE_ULTRA_WIDE, token: "u", rowSpan: 1, colSpan: 5, className: "sp-btn-ultra-wide" },
+];
+
 export interface ParsedGridOrder {
   grid: number[];
   sizes: SlotSizeMap;
@@ -9,22 +53,36 @@ function copySizes(sizes: SlotSizeMap | undefined): SlotSizeMap {
   return { ...(sizes || {}) };
 }
 
+export function cardSizeDefinition(size: number | null | undefined): CardSizeDefinition {
+  const normalized = size || CARD_SIZE_SINGLE;
+  for (const definition of CARD_SIZE_DEFINITIONS) {
+    if (definition.size === normalized) return definition;
+  }
+  return CARD_SIZE_SINGLE_DEFINITION;
+}
+
 export function sizeFromToken(token: string | null | undefined): number {
-  return token === "d" ? 2 : token === "w" ? 3 : token === "b" ? 4 :
-    token === "t" ? 5 : token === "x" ? 6 : 1;
+  const normalized = token || "";
+  for (const definition of CARD_SIZE_DEFINITIONS) {
+    if (definition.token === normalized) return definition.size;
+  }
+  return CARD_SIZE_SINGLE;
 }
 
 export function sizeToken(size: number | null | undefined): string {
-  return size === 4 ? "b" : size === 2 ? "d" : size === 3 ? "w" :
-    size === 5 ? "t" : size === 6 ? "x" : "";
+  return cardSizeDefinition(size).token;
 }
 
 export function sizeRowSpan(size: number | null | undefined): number {
-  return size === 5 ? 3 : (size === 2 || size === 4) ? 2 : 1;
+  return cardSizeDefinition(size).rowSpan;
 }
 
 export function sizeColSpan(size: number | null | undefined): number {
-  return size === 6 ? 3 : (size === 3 || size === 4) ? 2 : 1;
+  return cardSizeDefinition(size).colSpan;
+}
+
+export function cardSizeClass(size: number | null | undefined): string {
+  return cardSizeDefinition(size).className;
 }
 
 export function coveredCells(
@@ -80,41 +138,97 @@ export function applySpans(
   maxSlots: number,
   gridCols: number,
 ): void {
+  const entries = grid.slice(0, maxSlots);
+  interface GridEntry {
+    readonly slot: number;
+    readonly originalPos: number;
+    readonly size: number;
+    readonly area: number;
+    readonly candidates: number[];
+  }
+  const items: GridEntry[] = [];
   for (let i = 0; i < maxSlots; i += 1) {
-    const slot = grid[i] ?? 0;
+    const slot = entries[i] ?? 0;
     if (!(slot > 0 || slot === -2)) continue;
-    const slotKey = String(slot);
-    const size = sizes[slotKey] || 1;
-    if (size <= 1) continue;
-    if (!sizeFitsAt(i, size, maxSlots, gridCols)) {
-      delete sizes[slotKey];
-      continue;
+    const size = sizes[String(slot)] || 1;
+    const candidates: number[] = [];
+    for (let offset = 0; offset < maxSlots; offset += 1) {
+      const candidate = (i + offset) % maxSlots;
+      if (sizeFitsAt(candidate, size, maxSlots, gridCols)) candidates.push(candidate);
     }
-    const toReserve = coveredCells(i, size, maxSlots, gridCols, false);
-    let ok = true;
-    for (const cell of toReserve) {
-      const displaced = grid[cell] ?? 0;
-      if (displaced > 0 || displaced === -2) {
-        let placed = false;
-        for (let j = 0; j < maxSlots; j += 1) {
-          if ((grid[j] ?? 0) === 0 && toReserve.indexOf(j) === -1) {
-            grid[j] = displaced;
-            placed = true;
-            break;
-          }
-        }
-        if (!placed) {
-          ok = false;
-          break;
-        }
-        grid[cell] = 0;
+    items.push({
+      slot,
+      originalPos: i,
+      size,
+      area: sizeRowSpan(size) * sizeColSpan(size),
+      candidates,
+    });
+  }
+  const multiItems = items
+    .filter((item) => item.size > 1)
+    .sort((a, b) => a.candidates.length - b.candidates.length || b.area - a.area || a.originalPos - b.originalPos);
+  let bestPenalty = Number.POSITIVE_INFINITY;
+  let bestGrid: number[] | null = null;
+  let bestDowngraded: Record<string, boolean> = {};
+
+  const canPlace = (targetGrid: readonly number[], pos: number, itemSize: number): boolean => {
+    if (targetGrid[pos] !== 0) return false;
+    return coveredCells(pos, itemSize, maxSlots, gridCols, true).every((cell) => targetGrid[cell] === 0);
+  };
+  const place = (targetGrid: number[], item: GridEntry, pos: number): void => {
+    targetGrid[pos] = item.slot;
+    markSpannedCells(targetGrid, pos, item.size, maxSlots, gridCols);
+  };
+  const completeWithSingles = (
+    targetGrid: number[],
+    downgraded: Record<string, boolean>,
+    penalty: number,
+  ): boolean => {
+    const singleItems = items.filter((item) => item.size <= 1 || downgraded[String(item.slot)]);
+    if (targetGrid.filter((cell) => cell === 0).length < singleItems.length) return false;
+    for (const item of singleItems) {
+      let destination = targetGrid[item.originalPos] === 0 ? item.originalPos : -1;
+      for (let offset = 0; destination < 0 && offset < maxSlots; offset += 1) {
+        const candidate = (item.originalPos + offset) % maxSlots;
+        if (targetGrid[candidate] === 0) destination = candidate;
       }
+      if (destination < 0) return false;
+      targetGrid[destination] = item.slot;
     }
-    if (!ok) {
-      delete sizes[slotKey];
-      continue;
+    if (penalty < bestPenalty) {
+      bestPenalty = penalty;
+      bestGrid = targetGrid;
+      bestDowngraded = { ...downgraded };
     }
-    for (const cell of toReserve) grid[cell] = -1;
+    return penalty === 0;
+  };
+  const search = (
+    index: number,
+    targetGrid: number[],
+    downgraded: Record<string, boolean>,
+    penalty: number,
+  ): boolean => {
+    if (penalty >= bestPenalty) return false;
+    if (index >= multiItems.length) return completeWithSingles(targetGrid, downgraded, penalty);
+    const item = multiItems[index]!;
+    for (const candidate of item.candidates) {
+      if (!canPlace(targetGrid, candidate, item.size)) continue;
+      const nextGrid = targetGrid.slice();
+      place(nextGrid, item, candidate);
+      if (search(index + 1, nextGrid, downgraded, penalty)) return true;
+    }
+    const slotKey = String(item.slot);
+    downgraded[slotKey] = true;
+    const foundExact = search(index + 1, targetGrid, downgraded, penalty + item.area - 1);
+    delete downgraded[slotKey];
+    return foundExact;
+  };
+
+  search(0, Array<number>(maxSlots).fill(0), {}, 0);
+  const plannedGrid = bestGrid || Array<number>(maxSlots).fill(0);
+  for (let i = 0; i < maxSlots; i += 1) grid[i] = plannedGrid[i] ?? 0;
+  for (const item of items) {
+    if (item.size <= 1 || bestDowngraded[String(item.slot)]) delete sizes[String(item.slot)];
   }
 }
 

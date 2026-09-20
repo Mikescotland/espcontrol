@@ -7,23 +7,23 @@
 
 font:
   # Main action/setup icons
-  - file: 'https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf'
+  - file: '${mdi_font_file}'
     id: font_icon_main
     size: 44
     bpp: 4
     glyphs: !include ../../../common/assets/icon_glyphs.yaml
 
   # Smaller card icons
-  - file: 'https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf'
+  - file: '${mdi_font_file}'
     id: font_icon_card
     size: 33
     bpp: 4
-    glyphs: !include ../../../common/assets/icon_glyphs.yaml
+    glyphs: !include ../../../common/assets/climate_card_icon_glyphs.yaml
 
   # Status, network, and subpage icons
-  - file: 'https://github.com/Templarian/MaterialDesign-Webfont/raw/v7.4.47/fonts/materialdesignicons-webfont.ttf'
+  - file: '${mdi_font_file}'
     id: font_icon_status
-    size: 23
+    size: 24
     bpp: 4
     glyphs: !include ../../../common/assets/network_status_glyphs.yaml
 
@@ -37,7 +37,7 @@ font:
       - file: "gfonts://Heebo"
         glyphs: !include ../../../common/assets/hebrew_glyphs.yaml
 
-  # Compact supporting text
+  # Smaller secondary text
   - file: "gfonts://Roboto"
     id: font_text_small
     size: 18
@@ -61,6 +61,16 @@ font:
   - file: "gfonts://Roboto@Light"
     id: font_cover_art_title
     size: 70
+    bpp: 4
+    glyphs: !include ../../../common/assets/text_glyphs.yaml
+    extras:
+      - file: "gfonts://Heebo@Light"
+        glyphs: !include ../../../common/assets/hebrew_glyphs.yaml
+
+  # Media control modal title
+  - file: "gfonts://Roboto@Light"
+    id: font_media_control_title
+    size: 60
     bpp: 4
     glyphs: !include ../../../common/assets/text_glyphs.yaml
     extras:
@@ -92,20 +102,12 @@ font:
     glyphs:
       - "0123456789.-°/%"
       - ":"
+      - " dhms"
 
   # Large sensor values
   - file: "gfonts://Roboto@Thin"
     id: font_number_value_large
     size: 110
-    bpp: 4
-    glyphs:
-      - "0123456789.-°/%"
-      - ":"
-
-  # Large modal numbers
-  - file: "gfonts://Roboto@Thin"
-    id: font_number_modal
-    size: 96
     bpp: 4
     glyphs:
       - "0123456789.-°/%"

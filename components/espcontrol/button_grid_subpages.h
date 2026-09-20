@@ -12,10 +12,19 @@ struct SubpageBtn {
   std::string icon_on;
   std::string sensor;     // sensor entity, cover/internal mode, or action name
   std::string unit;
-  std::string type;       // button type: "" (toggle), action, sensor, door_window, presence, calendar, timezone, weather_forecast, slider, light_brightness, light_switch, fan_*, cover, garage, lock, alarm, alarm_action, media, push, webhook, todo, internal, subpage
+  std::string type;       // button type: "" (toggle), action, sensor, door_window, presence, calendar, timezone, weather_forecast, slider, light_brightness, light_switch, fan_*, cover, garage, gate, lock, alarm, alarm_action, media, push, webhook, internal, subpage
   std::string precision;  // decimal places for sensor display; "text" = text sensor mode
   std::string options;    // comma-delimited card options
 };
+
+inline bool subpage_btn_same_definition(const SubpageBtn &left,
+                                        const SubpageBtn &right) {
+  return left.entity == right.entity && left.label == right.label &&
+         left.icon == right.icon && left.icon_on == right.icon_on &&
+         left.sensor == right.sensor && left.unit == right.unit &&
+         left.type == right.type && left.precision == right.precision &&
+         left.options == right.options;
+}
 
 inline std::vector<std::string> split_subpage_fields(const std::string &value, char delim) {
   std::vector<std::string> out;
@@ -37,13 +46,17 @@ inline std::string decode_compact_subpage_field(const std::string &value) {
   return decode_compact_field(value);
 }
 
+inline std::string decode_compact_subpage_field(const std::string &value, size_t start, size_t len) {
+  return decode_compact_field(value, start, len);
+}
+
 inline SubpageBtn normalize_subpage_btn(SubpageBtn b) {
   if (brightness_slider_type(b.type) && !b.sensor.empty()) b.sensor.clear();
   if (fan_card_type(b.type)) {
     b.sensor.clear();
     b.unit.clear();
     b.precision.clear();
-    b.options.clear();
+    b.options = b.type == "fan_control" ? fan_control_card_options_normalized(b.options) : "";
     if (b.icon.empty() || b.icon == "Auto") b.icon = fan_card_default_icon_name(b.type);
     if (b.type == "fan_switch") {
       if (b.icon_on.empty() || b.icon_on == "Auto") b.icon_on = "Fan";
@@ -67,7 +80,10 @@ inline SubpageBtn normalize_subpage_btn(SubpageBtn b) {
       b.sensor = "play_pause";
     } else if (b.sensor != "play_pause" && b.sensor != "previous" &&
                b.sensor != "next" && b.sensor != "volume" &&
-               b.sensor != "position" && b.sensor != "now_playing") {
+               b.sensor != "position" && b.sensor != "now_playing" &&
+               b.sensor != "cover_art" &&
+               b.sensor != "control_modal" && b.sensor != "speaker_group" &&
+               b.sensor != "playlist") {
       b.sensor = "play_pause";
     }
     if (b.sensor == "previous" && b.label == "Skip Previous") b.label = "Previous";
@@ -76,16 +92,23 @@ inline SubpageBtn normalize_subpage_btn(SubpageBtn b) {
       if (b.label.empty() || b.label == "Media") b.label = "Volume";
       b.icon = "Auto";
     }
+    if (b.sensor == "playlist") {
+      if (b.label.empty() || b.label == "Media") b.label = "Playlist";
+      if (b.icon.empty() || b.icon == "Auto") b.icon = "Music";
+    }
     if (b.sensor == "position" && (b.label.empty() || b.label == "Track")) b.label = "Position";
     if (b.sensor == "now_playing") {
       b.precision = (b.precision == "progress" || b.precision == "play_pause") ? b.precision : "";
+    } else if (b.sensor == "cover_art") {
+      b.precision.clear();
     } else if ((b.sensor == "play_pause" || b.sensor == "position") && b.precision == "state") {
       b.precision = "state";
     } else {
       b.precision.clear();
     }
+    b.options = media_card_options_normalized(b.options, b.sensor);
   }
-  if (b.type == "climate") {
+  if (climate_card_type(b.type)) {
     b.sensor.clear();
     b.unit.clear();
     b.options = climate_card_options_normalized(b.options);
@@ -96,6 +119,19 @@ inline SubpageBtn normalize_subpage_btn(SubpageBtn b) {
     b.precision.clear();
     if (!b.sensor.empty()) b.icon_on.clear();
     b.options = garage_card_options_normalized(b.options, b.sensor);
+  }
+  if (b.type == "gate") {
+    if (b.sensor != "open" && b.sensor != "close" && b.sensor != "stop") b.sensor.clear();
+    b.unit.clear();
+    b.precision.clear();
+    if (!b.sensor.empty()) b.icon_on.clear();
+    b.options = gate_card_options_normalized(b.options, b.sensor);
+  }
+  if (b.type == "cover") {
+    if (!card_runtime_cover_mode_valid(b.sensor)) b.sensor.clear();
+    b.precision.clear();
+    if (b.sensor != "set_position") b.unit.clear();
+    b.options = cover_card_options_normalized(b.options, b.sensor);
   }
   if (b.type == "alarm") {
     b.sensor.clear();
@@ -128,19 +164,25 @@ inline SubpageBtn normalize_subpage_btn(SubpageBtn b) {
     if (b.icon.empty()) b.icon = "Auto";
     b.options = webhook_card_options_normalized(b.options);
   }
-  if (b.type == "todo") {
+  if (b.type == "image") {
     b.sensor.clear();
     b.unit.clear();
     b.precision.clear();
-    b.options = todo_card_options_normalized(b.options);
+    b.options = image_card_options_normalized(b.options);
+    normalize_image_card_overlay_fields(b.icon, b.options);
     b.icon_on = "Auto";
-    if (b.icon.empty() || b.icon == "Auto") b.icon = "Check";
   }
   if (b.type == "light_switch") {
     b.sensor.clear();
     b.unit.clear();
     b.precision.clear();
     b.options.clear();
+  }
+  if (b.type == "light_control") {
+    b.sensor.clear();
+    b.unit.clear();
+    b.precision.clear();
+    b.options = light_control_card_options_normalized(b.options);
   }
   if (b.type == "subpage") {
     b.options = subpage_card_options_normalized(b.options, b.sensor, b.precision);
@@ -175,11 +217,11 @@ inline SubpageBtn normalize_subpage_btn(SubpageBtn b) {
   p.precision = b.precision;
   if (!b.type.empty() && b.type != "action" && b.type != "alarm" &&
       b.type != "alarm_action" &&
-      b.type != "climate" && b.type != "garage" &&
-      b.type != "webhook" &&
-      b.type != "todo" &&
+      !climate_card_type(b.type) && b.type != "cover" && b.type != "garage" && b.type != "gate" &&
+      b.type != "webhook" && b.type != "wifi_qr" && b.type != "wifi_qr_card" &&
       b.type != "sensor" && b.type != "door_window" && b.type != "presence" &&
-      b.type != "subpage" &&
+      b.type != "subpage" && b.type != "light_control" && b.type != "media" &&
+      b.type != "image" &&
       !fan_card_type(b.type) && !card_large_numbers_supported(p)) {
     b.options.clear();
   }
@@ -203,92 +245,7 @@ inline ParsedCfg parsed_cfg_from_subpage_btn(const SubpageBtn &b) {
   return normalize_parsed_cfg(p);
 }
 
-inline lv_obj_t *create_grid_card_button(lv_obj_t *parent, lv_coord_t radius,
-                                         lv_coord_t pad,
-                                         const lv_font_t *label_font,
-                                         lv_color_t text_color) {
-  lv_obj_t *btn = lv_btn_create(parent);
-  lv_obj_set_style_radius(btn, radius, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(btn, pad, LV_PART_MAIN);
-  if (label_font) lv_obj_set_style_text_font(btn, label_font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(btn, text_color, LV_PART_MAIN);
-  lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
-  return btn;
-}
-
-inline lv_obj_t *create_card_sensor_container(lv_obj_t *parent,
-                                              const lv_font_t *value_font,
-                                              const lv_font_t *unit_font,
-                                              lv_color_t text_color,
-                                              lv_obj_t **value_lbl,
-                                              lv_obj_t **unit_lbl) {
-  lv_obj_t *container = lv_obj_create(parent);
-  lv_obj_set_align(container, LV_ALIGN_TOP_LEFT);
-  lv_obj_set_size(container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_clear_flag(container, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_flag(container, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(container, 0, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(container, 0, LV_PART_MAIN);
-  lv_obj_set_style_pad_column(container, 0, LV_PART_MAIN);
-  lv_obj_set_layout(container, LV_LAYOUT_FLEX);
-  lv_obj_set_style_flex_flow(container, LV_FLEX_FLOW_ROW, LV_PART_MAIN);
-  lv_obj_set_style_flex_cross_place(container, LV_FLEX_ALIGN_END, LV_PART_MAIN);
-
-  lv_obj_t *value = lv_label_create(container);
-  if (value_font) lv_obj_set_style_text_font(value, value_font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(value, text_color, LV_PART_MAIN);
-  lv_label_set_text(value, "--");
-
-  lv_obj_t *unit = lv_label_create(container);
-  if (unit_font) lv_obj_set_style_text_font(unit, unit_font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(unit, text_color, LV_PART_MAIN);
-  lv_obj_set_style_pad_bottom(unit, 6, LV_PART_MAIN);
-  lv_label_set_text(unit, "");
-
-  if (value_lbl) *value_lbl = value;
-  if (unit_lbl) *unit_lbl = unit;
-  return container;
-}
-
-inline BtnSlot create_dynamic_card_slot(lv_obj_t *btn,
-                                        const lv_font_t *icon_font,
-                                        const lv_font_t *value_font,
-                                        const lv_font_t *label_font,
-                                        lv_color_t text_color,
-                                        const lv_font_t *subpage_icon_font = nullptr) {
-  BtnSlot slot{};
-  slot.config = nullptr;
-  slot.btn = btn;
-  slot.icon_lbl = lv_label_create(btn);
-  if (icon_font) lv_obj_set_style_text_font(slot.icon_lbl, icon_font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(slot.icon_lbl, text_color, LV_PART_MAIN);
-  lv_label_set_text(slot.icon_lbl, "\U000F0493");
-  lv_obj_align(slot.icon_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-
-  slot.sensor_container = create_card_sensor_container(
-    btn, value_font, label_font, text_color, &slot.sensor_lbl, &slot.unit_lbl);
-
-  slot.text_lbl = lv_label_create(btn);
-  if (label_font) lv_obj_set_style_text_font(slot.text_lbl, label_font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(slot.text_lbl, text_color, LV_PART_MAIN);
-  lv_label_set_text(slot.text_lbl, espcontrol_i18n("Configure"));
-  lv_obj_align(slot.text_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-  configure_button_label_wrap(slot.text_lbl);
-
-  slot.subpage_lbl = lv_label_create(btn);
-  const lv_font_t *chevron_font = subpage_icon_font ? subpage_icon_font : icon_font;
-  if (chevron_font) lv_obj_set_style_text_font(slot.subpage_lbl, chevron_font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(slot.subpage_lbl, text_color, LV_PART_MAIN);
-  lv_obj_set_style_text_opa(slot.subpage_lbl, LV_OPA_50, LV_PART_MAIN);
-  lv_label_set_text(slot.subpage_lbl, "\U000F0142");
-  lv_obj_align(slot.subpage_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, 2);
-  lv_obj_add_flag(slot.subpage_lbl, LV_OBJ_FLAG_HIDDEN);
-  return slot;
-}
-
-// Parse "order|entity:label:icon:...|entity:label:..." into a vector of SubpageBtns
+// Parse "order|entity:label:icon:...|entity:label:..." into subpage buttons.
 inline std::vector<SubpageBtn> parse_subpage_config(const std::string &sp_cfg) {
   std::vector<SubpageBtn> btns;
   if (sp_cfg.empty()) return btns;
@@ -331,6 +288,93 @@ inline std::vector<SubpageBtn> parse_subpage_config(const std::string &sp_cfg) {
   return btns;
 }
 
+#ifndef ESPCONTROL_SUBPAGE_PARSER_ONLY
+
+inline lv_obj_t *create_grid_card_button(lv_obj_t *parent, lv_coord_t radius,
+                                         lv_coord_t pad,
+                                         const lv_font_t *label_font,
+                                         lv_color_t text_color) {
+  lv_obj_t *btn = lv_btn_create(parent);
+  lv_obj_set_style_radius(btn, radius, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(btn, pad, LV_PART_MAIN);
+  if (label_font) lv_obj_set_style_text_font(btn, label_font, LV_PART_MAIN);
+  lv_obj_set_style_text_color(btn, text_color, LV_PART_MAIN);
+  lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+  return btn;
+}
+
+inline lv_obj_t *create_card_sensor_container(lv_obj_t *parent,
+                                              const lv_font_t *value_font,
+                                              const lv_font_t *unit_font,
+                                              lv_color_t text_color,
+                                              lv_obj_t **value_lbl,
+                                              lv_obj_t **unit_lbl) {
+  lv_obj_t *container = lv_obj_create(parent);
+  lv_obj_set_align(container, LV_ALIGN_TOP_LEFT);
+  lv_obj_set_size(container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_clear_flag(container, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(container, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(container, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(container, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_column(container, 0, LV_PART_MAIN);
+  lv_obj_set_layout(container, LV_LAYOUT_FLEX);
+  lv_obj_set_style_flex_flow(container, LV_FLEX_FLOW_ROW, LV_PART_MAIN);
+  lv_obj_set_style_flex_cross_place(container, LV_FLEX_ALIGN_END, LV_PART_MAIN);
+
+  lv_obj_t *value = lv_label_create(container);
+  if (value_font) lv_obj_set_style_text_font(value, value_font, LV_PART_MAIN);
+  lv_obj_set_style_text_color(value, text_color, LV_PART_MAIN);
+  lv_label_set_display_text(value, "--");
+
+  lv_obj_t *unit = lv_label_create(container);
+  if (unit_font) lv_obj_set_style_text_font(unit, unit_font, LV_PART_MAIN);
+  lv_obj_set_style_text_color(unit, text_color, LV_PART_MAIN);
+  lv_obj_set_style_pad_bottom(unit, 6, LV_PART_MAIN);
+  lv_label_set_display_text(unit, "");
+
+  if (value_lbl) *value_lbl = value;
+  if (unit_lbl) *unit_lbl = unit;
+  return container;
+}
+
+inline BtnSlot create_dynamic_card_slot(lv_obj_t *btn,
+                                        const lv_font_t *icon_font,
+                                        const lv_font_t *value_font,
+                                        const lv_font_t *label_font,
+                                        lv_color_t text_color,
+                                        const lv_font_t *subpage_icon_font = nullptr) {
+  BtnSlot slot{};
+  slot.config = nullptr;
+  slot.btn = btn;
+  slot.icon_lbl = lv_label_create(btn);
+  if (icon_font) lv_obj_set_style_text_font(slot.icon_lbl, icon_font, LV_PART_MAIN);
+  lv_obj_set_style_text_color(slot.icon_lbl, text_color, LV_PART_MAIN);
+  lv_label_set_display_text(slot.icon_lbl, "\U000F0493");
+  lv_obj_align(slot.icon_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+  slot.sensor_container = create_card_sensor_container(
+    btn, value_font, label_font, text_color, &slot.sensor_lbl, &slot.unit_lbl);
+
+  slot.text_lbl = lv_label_create(btn);
+  if (label_font) lv_obj_set_style_text_font(slot.text_lbl, label_font, LV_PART_MAIN);
+  lv_obj_set_style_text_color(slot.text_lbl, text_color, LV_PART_MAIN);
+  lv_label_set_display_text(slot.text_lbl, espcontrol_i18n("Configure"));
+  lv_obj_align(slot.text_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  configure_button_label_wrap(slot.text_lbl);
+
+  slot.subpage_lbl = lv_label_create(btn);
+  const lv_font_t *chevron_font = subpage_icon_font ? subpage_icon_font : icon_font;
+  if (chevron_font) lv_obj_set_style_text_font(slot.subpage_lbl, chevron_font, LV_PART_MAIN);
+  lv_obj_set_style_text_color(slot.subpage_lbl, text_color, LV_PART_MAIN);
+  lv_obj_set_style_text_opa(slot.subpage_lbl, LV_OPA_50, LV_PART_MAIN);
+  lv_label_set_display_text(slot.subpage_lbl, "\U000F0142");
+  lv_obj_align(slot.subpage_lbl, LV_ALIGN_BOTTOM_RIGHT, 0, 2);
+  lv_obj_add_flag(slot.subpage_lbl, LV_OBJ_FLAG_HIDDEN);
+  return slot;
+}
+
 // Extract the order string (everything before the first pipe) from subpage config
 inline std::string get_subpage_order(const std::string &sp_cfg) {
   if (sp_cfg.empty()) return "";
@@ -340,17 +384,19 @@ inline std::string get_subpage_order(const std::string &sp_cfg) {
   return sp_cfg.substr(start, pe - start);
 }
 
-inline std::string subpage_back_token_base(std::string token) {
-  size_t eq = token.find('=');
-  if (eq != std::string::npos) token = token.substr(0, eq);
-  return token;
-}
-
-inline std::string subpage_back_label_from_order_token(const std::string &token) {
-  size_t eq = token.find('=');
-  if (eq == std::string::npos) return espcontrol_i18n(std::string("Back"));
-  std::string label = decode_compact_subpage_field(token.substr(eq + 1));
-  return label.empty() ? espcontrol_i18n(std::string("Back")) : label;
+inline bool subpage_back_token_span(const std::string &order_str, size_t start, size_t end, char &suffix,
+                                    size_t *label_start = nullptr) {
+  while (start < end && std::isspace(static_cast<unsigned char>(order_str[start]))) start++;
+  while (end > start && std::isspace(static_cast<unsigned char>(order_str[end - 1]))) end--;
+  size_t eq = order_str.find('=', start);
+  size_t base_end = (eq == std::string::npos || eq > end) ? end : eq;
+  while (base_end > start && std::isspace(static_cast<unsigned char>(order_str[base_end - 1]))) base_end--;
+  size_t len = base_end - start;
+  if (len < 1 || len > 2 || order_str[start] != 'B') return false;
+  suffix = len == 2 ? order_str[start + 1] : '\0';
+  if (suffix != '\0' && !grid_token_has_span_suffix(suffix)) return false;
+  if (label_start) *label_start = (eq == std::string::npos || eq >= end) ? std::string::npos : eq + 1;
+  return true;
 }
 
 inline std::string get_subpage_back_label(const std::string &order_str) {
@@ -360,11 +406,14 @@ inline std::string get_subpage_back_label(const std::string &order_str) {
     size_t cm = order_str.find(',', st);
     if (cm == std::string::npos) cm = order_str.length();
     if (cm > st) {
-      std::string tk = order_str.substr(st, cm - st);
-      std::string base = subpage_back_token_base(tk);
-      if (base == "B" || base == "Bd" || base == "Bw" || base == "Bb" ||
-          base == "Bt" || base == "Bx") {
-        return subpage_back_label_from_order_token(tk);
+      char suffix = '\0';
+      size_t label_start = std::string::npos;
+      if (subpage_back_token_span(order_str, st, cm, suffix, &label_start)) {
+        if (label_start != std::string::npos) {
+          std::string label = decode_compact_subpage_field(order_str, label_start, cm - label_start);
+          return label.empty() ? espcontrol_i18n(std::string("Back")) : label;
+        }
+        return espcontrol_i18n(std::string("Back"));
       }
     }
     st = cm + 1;
@@ -388,13 +437,15 @@ inline void subscribe_subpage_parent_indicator(
     lv_obj_t *parent_btn, lv_obj_t *parent_icon,
     int parent_idx, bool *child_was_on,
     bool has_alt_icon, const char *off_glyph, const char *on_glyph,
-    int *sp_on_count) {
+    int *sp_on_count,
+    bool (*is_active_state)(esphome::StringRef) = is_entity_on_ref) {
   ha_subscribe_state(
     entity_id,
     std::function<void(esphome::StringRef)>(
       [parent_btn, parent_icon, parent_idx, child_was_on,
-       has_alt_icon, off_glyph, on_glyph, sp_on_count](esphome::StringRef state) {
-        bool is_on = is_entity_on_ref(state);
+       has_alt_icon, off_glyph, on_glyph, sp_on_count,
+       is_active_state](esphome::StringRef state) {
+        bool is_on = is_active_state(state);
         if (is_on && !*child_was_on) {
           sp_on_count[parent_idx]++;
           *child_was_on = true;
@@ -404,11 +455,64 @@ inline void subscribe_subpage_parent_indicator(
         }
         if (sp_on_count[parent_idx] > 0) {
           set_card_checked_state(parent_btn, true);
-          if (has_alt_icon) lv_label_set_text(parent_icon, on_glyph);
+          if (has_alt_icon) lv_label_set_display_text(parent_icon, on_glyph);
         } else {
           set_card_checked_state(parent_btn, false);
-          if (has_alt_icon) lv_label_set_text(parent_icon, off_glyph);
+          if (has_alt_icon) lv_label_set_display_text(parent_icon, off_glyph);
         }
+      })
+  );
+}
+
+struct ClimateSubpageParentIndicatorCtx {
+  std::string hvac_mode = "off";
+  std::string hvac_action;
+  bool available = true;
+  lv_obj_t *parent_btn = nullptr;
+  lv_obj_t *parent_icon = nullptr;
+  bool has_alt_icon = false;
+  const char *off_glyph = nullptr;
+  const char *on_glyph = nullptr;
+};
+
+inline void apply_climate_subpage_parent_indicator(ClimateSubpageParentIndicatorCtx *ctx) {
+  if (!ctx) return;
+  bool working = espcontrol::climate::parent_indicator_active(
+      ctx->available, ctx->hvac_mode, ctx->hvac_action);
+  set_card_checked_state(ctx->parent_btn, working);
+  if (ctx->has_alt_icon && ctx->parent_icon)
+    lv_label_set_display_text(ctx->parent_icon, working ? ctx->on_glyph : ctx->off_glyph);
+}
+
+inline void subscribe_climate_subpage_parent_indicator(
+    const std::string &entity_id,
+    lv_obj_t *parent_btn, lv_obj_t *parent_icon,
+    bool has_alt_icon, const char *off_glyph, const char *on_glyph) {
+  if (entity_id.empty()) return;
+  ClimateSubpageParentIndicatorCtx *ctx = new ClimateSubpageParentIndicatorCtx();
+  ctx->parent_btn = parent_btn;
+  ctx->parent_icon = parent_icon;
+  ctx->has_alt_icon = has_alt_icon;
+  ctx->off_glyph = off_glyph;
+  ctx->on_glyph = on_glyph;
+  apply_climate_subpage_parent_indicator(ctx);
+
+  ha_subscribe_state(
+    entity_id,
+    std::function<void(esphome::StringRef)>(
+      [ctx](esphome::StringRef state) {
+        ctx->hvac_mode = climate_hvac_service_value(string_ref_limited(state, HA_SHORT_STATE_MAX_LEN));
+        ctx->available = !climate_unavailable_value(ctx->hvac_mode);
+        if (!ctx->available) ctx->hvac_mode = "off";
+        apply_climate_subpage_parent_indicator(ctx);
+      })
+  );
+  ha_subscribe_attribute(
+    entity_id, std::string("hvac_action"),
+    std::function<void(esphome::StringRef)>(
+      [ctx](esphome::StringRef value) {
+        ctx->hvac_action = climate_lower(climate_trim(string_ref_limited(value, HA_SHORT_STATE_MAX_LEN)));
+        apply_climate_subpage_parent_indicator(ctx);
       })
   );
 }
@@ -428,19 +532,22 @@ inline void parse_subpage_order(const std::string &order_str, int num_slots, int
     size_t cm = order_str.find(',', st2);
     if (cm == std::string::npos) cm = order_str.length();
     if (cm > st2) {
-      std::string tk = order_str.substr(st2, cm - st2);
-      tk = subpage_back_token_base(tk);
-      if (tk == "B" || tk == "Bd" || tk == "Bw" || tk == "Bb" || tk == "Bt" || tk == "Bx") {
+      char back_suffix = '\0';
+      if (subpage_back_token_span(order_str, st2, cm, back_suffix)) {
         result.back_pos = gp2;
-        grid_token_spans(tk.length() > 1 ? tk[1] : '\0', result.back_row_span, result.back_col_span);
+        grid_token_spans(back_suffix, result.back_row_span, result.back_col_span);
         result.has_back_token = true;
       } else {
+        size_t token_end = cm;
         int row_span = 1, col_span = 1;
-        if (!tk.empty() && grid_token_has_span_suffix(tk.back())) {
-          grid_token_spans(tk.back(), row_span, col_span);
-          tk.pop_back();
+        while (token_end > st2 && std::isspace(static_cast<unsigned char>(order_str[token_end - 1]))) {
+          token_end--;
         }
-        int v = atoi(tk.c_str());
+        if (token_end > st2 && grid_token_has_span_suffix(order_str[token_end - 1])) {
+          grid_token_spans(order_str[token_end - 1], row_span, col_span);
+          token_end--;
+        }
+        int v = parse_positive_int_span(order_str, st2, token_end);
         if (v >= 1 && v <= btn_limit) {
           result.positions[gp2] = v;
           result.row_span[v - 1] = row_span;
@@ -452,3 +559,28 @@ inline void parse_subpage_order(const std::string &order_str, int num_slots, int
     st2 = cm + 1;
   }
 }
+
+inline void normalize_subpage_order_spans(SubpageOrder &order, int num_slots,
+                                          int cols) {
+  int slot_limit = bounded_grid_slots(num_slots);
+  if (order.has_back_token) {
+    normalize_grid_span_for_position(order.back_pos, slot_limit, cols,
+                                     order.back_row_span,
+                                     order.back_col_span);
+  }
+  for (int position = 0; position < slot_limit; position++) {
+    int button_index = order.positions[position];
+    if (button_index < 1 || button_index > MAX_GRID_SLOTS) continue;
+    int rendered_position = order.has_back_token ? position : position + 1;
+    if (rendered_position >= slot_limit) {
+      order.positions[position] = 0;
+      continue;
+    }
+    int &row_span = order.row_span[button_index - 1];
+    int &col_span = order.col_span[button_index - 1];
+    normalize_grid_span_for_position(rendered_position, slot_limit, cols,
+                                     row_span, col_span);
+  }
+}
+
+#endif  // ESPCONTROL_SUBPAGE_PARSER_ONLY

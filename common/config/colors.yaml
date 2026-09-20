@@ -1,14 +1,13 @@
 # =============================================================================
-# CONFIG: BUTTON COLORS
+# CONFIG: BUTTON COLOUR
 # =============================================================================
-# Primary (on), secondary (off), and tertiary (sensor card) colours shared
-# across all devices. Values are 6-digit hex strings without the # prefix.
+# Primary (on) colour shared across all devices. Secondary and tertiary UI
+# colours are fixed in the shared firmware style tokens.
+# Values are 6-digit hex strings without the # prefix.
 # =============================================================================
 
 substitutions:
   button_on_color_initial: "FF8C00"
-  button_off_color_initial: "313131"
-  sensor_card_color_initial: "212121"
 
 text:
   - platform: template
@@ -26,35 +25,29 @@ text:
     update_interval: never
     web_server:
       sorting_group_id: sg_display
+    on_value:
+      then:
+        # Initial text restoration happens before the display is ready. Boot
+        # already builds the grid with that value; refresh only live changes.
+        - if:
+            condition:
+              lambda: 'return id(screen_rotation_ready);'
+            then:
+              - script.execute: refresh_colour_grid
 
-  - platform: template
-    name: "${entity_button_off_color}"
-    internal: true
-    id: button_off_color
-    optimistic: true
-    restore_value: true
-    initial_value: "${button_off_color_initial}"
-    min_length: 6
-    max_length: 6
-    mode: text
-    entity_category: config
-    icon: "mdi:palette-outline"
-    update_interval: never
-    web_server:
-      sorting_group_id: sg_display
-
-  - platform: template
-    name: "${entity_sensor_card_color}"
-    internal: true
-    id: sensor_card_color
-    optimistic: true
-    restore_value: true
-    initial_value: "${sensor_card_color_initial}"
-    min_length: 6
-    max_length: 6
-    mode: text
-    entity_category: config
-    icon: "mdi:palette-outline"
-    update_interval: never
-    web_server:
-      sorting_group_id: sg_display
+script:
+  - id: refresh_colour_grid
+    mode: restart
+    then:
+      # Coalesce colour-picker events without imposing the layout-save delay.
+      - delay: 200ms
+      - if:
+          condition:
+            and:
+              - not:
+                  script.is_running: refresh_button_grid
+              - not:
+                  script.is_running: refresh_subpage_grid
+          then:
+            - script.execute: apply_button_grid
+          # A pending layout refresh will apply the latest colour itself.

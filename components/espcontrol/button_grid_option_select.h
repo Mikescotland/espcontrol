@@ -4,9 +4,10 @@
 
 // ── Option select card helpers ───────────────────────────────────────
 
-constexpr int OPTION_SELECT_MAX_OPTIONS = 32;
+constexpr int OPTION_SELECT_MAX_OPTIONS = 64;
 constexpr size_t OPTION_SELECT_OPTION_MAX_LEN = 96;
-constexpr size_t OPTION_SELECT_OPTIONS_TEXT_MAX_LEN = 1024;
+constexpr size_t OPTION_SELECT_OPTIONS_TEXT_MAX_LEN =
+  OPTION_SELECT_MAX_OPTIONS * (OPTION_SELECT_OPTION_MAX_LEN + 4);
 
 struct OptionSelectCtx {
   std::string entity_id;
@@ -21,8 +22,8 @@ struct OptionSelectCtx {
   lv_obj_t *unit_lbl = nullptr;
   lv_obj_t *label_lbl = nullptr;
   uint32_t accent_color = DEFAULT_SLIDER_COLOR;
-  uint32_t secondary_color = DEFAULT_OFF_COLOR;
-  uint32_t tertiary_color = DEFAULT_TERTIARY_COLOR;
+  uint32_t secondary_color = SECONDARY_GREY;
+  uint32_t tertiary_color = TERTIARY_GREY;
   int width_compensation_percent = 100;
   const lv_font_t *value_font = nullptr;
   const lv_font_t *label_font = nullptr;
@@ -42,6 +43,7 @@ struct OptionSelectModalUi {
   lv_obj_t *list = nullptr;
   lv_obj_t *empty_lbl = nullptr;
   OptionSelectCtx *active = nullptr;
+  lv_obj_t *option_rows[OPTION_SELECT_MAX_OPTIONS] = {};
   OptionSelectOptionClick option_clicks[OPTION_SELECT_MAX_OPTIONS];
 };
 
@@ -78,12 +80,12 @@ inline void option_select_apply_card_text(OptionSelectCtx *ctx) {
   if (!ctx) return;
   if (ctx->value_lbl) {
     std::string text = option_select_display_value(ctx->current_option);
-    lv_label_set_text(ctx->value_lbl, text.c_str());
+    lv_label_set_display_text(ctx->value_lbl, text.c_str());
   }
-  if (ctx->unit_lbl) lv_label_set_text(ctx->unit_lbl, "");
+  if (ctx->unit_lbl) lv_label_set_display_text(ctx->unit_lbl, "");
   if (ctx->label_lbl) {
     std::string label = option_select_label(ctx);
-    lv_label_set_text(ctx->label_lbl, label.c_str());
+    lv_label_set_display_text(ctx->label_lbl, label.c_str());
   }
 }
 
@@ -103,12 +105,12 @@ inline void setup_option_select_card(BtnSlot &s, const ParsedCfg &p,
     ? value_font
     : s.text_lbl ? lv_obj_get_style_text_font(s.text_lbl, LV_PART_MAIN) : nullptr;
   if (text_value_font) lv_obj_set_style_text_font(s.sensor_lbl, text_value_font, LV_PART_MAIN);
-  lv_label_set_text(s.sensor_lbl, "--");
-  lv_label_set_text(s.unit_lbl, "");
+  lv_label_set_display_text(s.sensor_lbl, "--");
+  lv_label_set_display_text(s.unit_lbl, "");
   std::string label = p.label.empty()
     ? (p.entity.empty() ? espcontrol_i18n(std::string("Option")) : p.entity)
     : p.label;
-  lv_label_set_text(s.text_lbl, label.c_str());
+  lv_label_set_display_text(s.text_lbl, label.c_str());
   apply_push_button_transition(s.btn);
 }
 
@@ -223,6 +225,22 @@ inline void option_select_hide_modal() {
   ui = OptionSelectModalUi();
 }
 
+inline void option_select_refresh_modal_rows(OptionSelectCtx *ctx) {
+  if (!ctx) return;
+  OptionSelectModalUi &ui = option_select_modal_ui();
+  if (ui.active != ctx) return;
+  int count = ctx->options.size() > OPTION_SELECT_MAX_OPTIONS
+    ? OPTION_SELECT_MAX_OPTIONS
+    : static_cast<int>(ctx->options.size());
+  for (int i = 0; i < count; i++) {
+    lv_obj_t *row = ui.option_rows[i];
+    if (!row) continue;
+    bool active = !ctx->current_option.empty() && ctx->options[i] == ctx->current_option;
+    lv_obj_set_style_bg_color(
+      row, lv_color_hex(active ? ctx->accent_color : SECONDARY_GREY), LV_PART_MAIN);
+  }
+}
+
 inline void option_select_open_modal(OptionSelectCtx *ctx) {
   if (!ctx || ctx->entity_id.empty() || !ctx->available ||
       !option_select_entity_supported(ctx->entity_id)) {
@@ -230,7 +248,7 @@ inline void option_select_open_modal(OptionSelectCtx *ctx) {
   }
   ControlModalShell shell = control_modal_open_shell(
     ControlModalKind::OPTION_SELECT, ctx->btn, ctx->width_compensation_percent,
-    ctx->icon_font, "\U000F0156", true, option_select_hide_modal);
+    ctx->icon_font, option_select_hide_modal);
   OptionSelectModalUi &ui = option_select_modal_ui();
   ui.active = ctx;
   ui.overlay = shell.overlay;
@@ -265,8 +283,9 @@ inline void option_select_open_modal(OptionSelectCtx *ctx) {
     bool active = ctx->options[i] == ctx->current_option;
     lv_obj_t *btn = control_modal_create_list_row(
       ui.list, ctx->options[i], active, row_h, row_radius,
-      ctx->accent_color, DARK_BACKGROUND_SECONDARY,
+      ctx->accent_color, SECONDARY_GREY,
       ctx->label_font, ctx->width_compensation_percent);
+    ui.option_rows[i] = btn;
     ui.option_clicks[i].ctx = ctx;
     ui.option_clicks[i].value = ctx->options[i];
     lv_obj_add_event_cb(btn, [](lv_event_t *e) {
@@ -279,7 +298,7 @@ inline void option_select_open_modal(OptionSelectCtx *ctx) {
 
   if (count == 0) {
     ui.empty_lbl = lv_label_create(ui.list);
-    lv_label_set_text(ui.empty_lbl, espcontrol_i18n("No options"));
+    lv_label_set_display_text(ui.empty_lbl, espcontrol_i18n("No options"));
     lv_label_set_long_mode(ui.empty_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(ui.empty_lbl, lv_pct(100));
     lv_obj_set_style_text_color(ui.empty_lbl, lv_color_hex(DARK_TEXT_PRIMARY), LV_PART_MAIN);
@@ -316,16 +335,16 @@ inline OptionSelectCtx *create_option_select_context(
 
 inline void subscribe_option_select_state(OptionSelectCtx *ctx) {
   if (!ctx || ctx->entity_id.empty()) return;
-  register_ha_control_availability(ctx->btn, ctx->btn);
   ha_subscribe_state(
     ctx->entity_id,
     std::function<void(esphome::StringRef)>([ctx](esphome::StringRef state) {
       std::string state_text = string_ref_limited(state, HA_STATE_TEXT_MAX_LEN);
-      bool unavailable = ha_state_unavailable_ref(state);
+      bool unavailable = ha_entity_state_unavailable_ref(ctx->entity_id, state);
+      bool no_current_option = normalized_state_text(state) == "unknown";
       ctx->available = !unavailable;
-      ctx->current_option = unavailable ? "" : state_text;
-      apply_control_availability(ctx->btn, ctx->btn, ctx->available);
+      ctx->current_option = unavailable || no_current_option ? "" : state_text;
       option_select_apply_card_text(ctx);
+      option_select_refresh_modal_rows(ctx);
       OptionSelectModalUi &ui = option_select_modal_ui();
       if (ui.active == ctx && !ctx->available) option_select_hide_modal();
     })

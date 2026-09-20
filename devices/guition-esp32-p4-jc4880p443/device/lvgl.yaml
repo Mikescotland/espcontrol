@@ -16,12 +16,12 @@ lvgl:
     widgets:
       # Indoor/outdoor temperature (top-left)
       - label:
-          text: "-°C / -°C"
+          text: "-°C"
           id: temperatures
           text_font: font_text_body
           align: top_left
           x: 8
-          y: 8
+          y: 5
           text_color: 0xFFFFFF
           hidden: true
 
@@ -32,7 +32,7 @@ lvgl:
           text_font: font_text_body
           align: top_mid
           x: 0
-          y: 8
+          y: 3
           text_align: center
           text_color: 0xFFFFFF
           hidden: true
@@ -64,6 +64,32 @@ lvgl:
             then:
               - script.execute: network_status_open_info
 
+      # Night mode indicator (schedule night period only). Starts hidden;
+      # clock_bar_apply positions and reveals it beside the network icon, so the
+      # x/y here are unused placeholders.
+      - obj:
+          id: night_mode_status_icon
+          align: top_right
+          x: 0
+          y: 0
+          width: 42
+          height: 38
+          bg_opa: 0%
+          border_width: 0
+          pad_all: 0
+          scrollable: false
+          scrollbar_mode: "off"
+          clickable: false
+          hidden: true
+          widgets:
+            - label:
+                id: night_mode_status_icon_label
+                text: "\U000F00DC"
+                text_font: font_icon_status
+                align: center
+                text_align: center
+                text_color: 0xFFFFFF
+
   # ---------------------------------------------------------------------------
   # Main page (fixed 3x2 grid of button widgets)
   # ---------------------------------------------------------------------------
@@ -74,8 +100,8 @@ lvgl:
         type: grid
         grid_columns: [FR(1), FR(1)]
         grid_rows: [FR(1), FR(1), FR(1)]
-        pad_row: 14
-        pad_column: 14
+        pad_row: ${main_page_card_gap}
+        pad_column: ${main_page_card_gap}
       width: 100%
       bg_color: Black
       bg_opa: cover

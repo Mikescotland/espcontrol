@@ -1,16 +1,24 @@
+#ifndef ESPCONTROL_BACKLIGHT_H
+#define ESPCONTROL_BACKLIGHT_H
+
 // =============================================================================
 // BACKLIGHT - Brightness scheduling, sunrise/sunset, and UI helpers
 // =============================================================================
-// Shared C++ utilities for backlight schedule logic and temperature label
-// management. Extracted from YAML lambdas so the logic is testable and
-// syntax-highlighted, while YAML retains only thin id() wiring.
+// Shared C++ utilities for backlight schedule logic and screensaver layout.
+// Extracted from YAML lambdas so the logic is testable and syntax-highlighted,
+// while YAML retains only thin id() wiring.
 // =============================================================================
 #pragma once
 #include <string>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <vector>
+#include <algorithm>
 #include "esphome/components/lvgl/lvgl_esphome.h"
+#include "clock_bar.h"
+#include "backlight_fade.h"
+#include "display_mode_controller.h"
 #include "sun_calc.h"
 #include "temperature_unit.h"
 
@@ -19,82 +27,39 @@
 #include <esp_system.h>
 #endif
 
+using BacklightDisplayTakeoverCallback = void (*)();
+
+inline BacklightDisplayTakeoverCallback &backlight_display_takeover_callback() {
+  static BacklightDisplayTakeoverCallback callback = nullptr;
+  return callback;
+}
+
+inline void set_backlight_display_takeover_callback(BacklightDisplayTakeoverCallback callback) {
+  backlight_display_takeover_callback() = callback;
+}
+
+inline void backlight_close_modals_for_display_takeover() {
+  BacklightDisplayTakeoverCallback callback = backlight_display_takeover_callback();
+  if (callback) callback();
+}
+
 // ── Sunrise/sunset recalculation ─────────────────────────────────────
 
 struct SunCalcResult {
   int rise_h, rise_m, set_h, set_m;
   bool valid;
-  char sunrise_str[16];
-  char sunset_str[16];
+  char sunrise_str[32];
+  char sunset_str[32];
 };
-
-inline int fixed_decimal_scale(int precision) {
-  if (precision <= 0) return 1;
-  if (precision == 1) return 10;
-  if (precision == 2) return 100;
-  return 1000;
-}
-
-inline void format_fixed_decimal(char *buf, size_t size, float value, int precision) {
-  if (size == 0) return;
-  if (!std::isfinite(value)) {
-    snprintf(buf, size, "--");
-    return;
-  }
-
-  if (precision < 0) precision = 0;
-  if (precision > 3) precision = 3;
-
-  bool negative = value < 0.0f;
-  float abs_value = negative ? -value : value;
-  int scale = fixed_decimal_scale(precision);
-  int scaled = (int)(abs_value * scale + 0.5f);
-  if (scaled == 0) negative = false;
-
-  int whole = scaled / scale;
-  int frac = scaled % scale;
-  const char *sign = negative ? "-" : "";
-
-  if (precision == 0) {
-    snprintf(buf, size, "%s%d", sign, whole);
-  } else if (precision == 1) {
-    snprintf(buf, size, "%s%d.%01d", sign, whole, frac);
-  } else if (precision == 2) {
-    snprintf(buf, size, "%s%d.%02d", sign, whole, frac);
-  } else {
-    snprintf(buf, size, "%s%d.%03d", sign, whole, frac);
-  }
-}
-
-inline void format_fixed_decimal_unit(char *buf, size_t size, float value,
-                                      int precision, const char *unit) {
-  char value_buf[24];
-  format_fixed_decimal(value_buf, sizeof(value_buf), value, precision);
-  snprintf(buf, size, "%s%s", value_buf, unit ? unit : "");
-}
-
-inline void format_clock_bar_temperature_single(char *buf, size_t size,
-                                                const char *value_text) {
-  snprintf(buf, size, "%s%s", value_text ? value_text : "-",
-           display_clock_bar_temperature_suffix());
-}
-
-inline void format_clock_bar_temperature_pair(char *buf, size_t size,
-                                              const char *outdoor_text,
-                                              const char *indoor_text) {
-  const char *suffix = display_clock_bar_temperature_suffix();
-  snprintf(buf, size, "%s%s / %s%s", outdoor_text ? outdoor_text : "-", suffix,
-           indoor_text ? indoor_text : "-",
-           suffix);
-}
 
 inline SunCalcResult recalc_sunrise_sunset(
     int year, int month, int day,
     const std::string &tz_option, bool use_12h = true) {
   SunCalcResult r = {};
 
-  std::string tz_id = timezone_id_from_option(tz_option);
-  float tz_offset = utc_offset_hours_for_date(year, month, day, tz_option);
+  std::string effective_tz_option = effective_timezone_option(tz_option);
+  std::string tz_id = timezone_id_from_option(effective_tz_option);
+  float tz_offset = utc_offset_hours_for_date(year, month, day, effective_tz_option);
 
   float lat, lon;
   if (!lookup_tz_coords(tz_id, lat, lon)) {
@@ -129,15 +94,11 @@ inline SunCalcResult recalc_sunrise_sunset(
     snprintf(r.sunset_str, sizeof(r.sunset_str), "%02d:%02d", sh, sm);
   }
 
-  int lat_c = (int)((lat >= 0 ? lat : -lat) * 100.0f + 0.5f);
-  int lon_c = (int)((lon >= 0 ? lon : -lon) * 100.0f + 0.5f);
   int tz_c = (int)((tz_offset >= 0 ? tz_offset : -tz_offset) * 10.0f + 0.5f);
   ESP_LOGI("backlight",
            "Sunrise %02d:%02d, Sunset %02d:%02d "
-           "(lat=%s%d.%02d lon=%s%d.%02d tz=%s%d.%d)",
+           "(tz=%s%d.%d)",
            rh, rm, sh, sm,
-           lat < 0 ? "-" : "", lat_c / 100, lat_c % 100,
-           lon < 0 ? "-" : "", lon_c / 100, lon_c % 100,
            tz_offset < 0 ? "-" : "", tz_c / 10, tz_c % 10);
 
   return r;
@@ -169,6 +130,84 @@ inline bool check_daylight_transition(
   return is_day != last_is_day;
 }
 
+inline bool parse_time_of_day(const std::string &value, int &hour, int &minute) {
+  int h = -1;
+  int m = -1;
+  if (std::sscanf(value.c_str(), " %d:%d", &h, &m) != 2) return false;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return false;
+  hour = h;
+  minute = m;
+  return true;
+}
+
+inline bool brightness_mode_manual(const std::string &mode) {
+  return mode == "Manual" || mode == "manual";
+}
+
+inline bool brightness_mode_uses_fixed_times(const std::string &mode) {
+  return mode == "Fixed times" || mode == "fixed_times" || mode == "fixed";
+}
+
+inline bool brightness_mode_uses_sun(const std::string &mode) {
+  return !brightness_mode_manual(mode) && !brightness_mode_uses_fixed_times(mode);
+}
+
+inline std::string normalize_brightness_mode(const std::string &mode) {
+  if (brightness_mode_manual(mode)) return "Manual";
+  if (brightness_mode_uses_fixed_times(mode)) return "Fixed times";
+  return "Sunrise and sunset";
+}
+
+inline bool brightness_schedule_times(
+    const std::string &brightness_mode,
+    bool sunrise_valid, int sunrise_h, int sunrise_m, int sunset_h, int sunset_m,
+    const std::string &manual_dawn, const std::string &manual_dusk,
+    int &rise_h, int &rise_m, int &set_h, int &set_m) {
+  if (brightness_mode_manual(brightness_mode)) return false;
+
+  if (brightness_mode_uses_sun(brightness_mode)) {
+    rise_h = sunrise_h;
+    rise_m = sunrise_m;
+    set_h = sunset_h;
+    set_m = sunset_m;
+    return sunrise_valid;
+  }
+
+  int dawn_h = 6;
+  int dawn_m = 0;
+  int dusk_h = 18;
+  int dusk_m = 0;
+  bool dawn_valid = parse_time_of_day(manual_dawn, dawn_h, dawn_m);
+  bool dusk_valid = parse_time_of_day(manual_dusk, dusk_h, dusk_m);
+  rise_h = dawn_h;
+  rise_m = dawn_m;
+  set_h = dusk_h;
+  set_m = dusk_m;
+  return dawn_valid && dusk_valid;
+}
+
+inline bool brightness_schedule_times(
+    const char *brightness_mode,
+    bool sunrise_valid, int sunrise_h, int sunrise_m, int sunset_h, int sunset_m,
+    const std::string &manual_dawn, const std::string &manual_dusk,
+    int &rise_h, int &rise_m, int &set_h, int &set_m) {
+  return brightness_schedule_times(
+      std::string(brightness_mode ? brightness_mode : ""),
+      sunrise_valid, sunrise_h, sunrise_m, sunset_h, sunset_m,
+      manual_dawn, manual_dusk, rise_h, rise_m, set_h, set_m);
+}
+
+inline bool brightness_schedule_times(
+    bool automatic_times_enabled,
+    bool sunrise_valid, int sunrise_h, int sunrise_m, int sunset_h, int sunset_m,
+    const std::string &manual_dawn, const std::string &manual_dusk,
+    int &rise_h, int &rise_m, int &set_h, int &set_m) {
+  return brightness_schedule_times(
+      std::string(automatic_times_enabled ? "Sunrise and sunset" : "Fixed times"),
+      sunrise_valid, sunrise_h, sunrise_m, sunset_h, sunset_m,
+      manual_dawn, manual_dusk, rise_h, rise_m, set_h, set_m);
+}
+
 // ── Screen schedule helpers ───────────────────────────────────────────
 
 inline bool screen_schedule_in_window(int now_h, int on_hour, int off_hour) {
@@ -183,11 +222,91 @@ inline bool screen_schedule_in_window(int now_h, int on_hour, int off_hour) {
 
 inline bool screen_schedule_always_on_mode(const std::string &mode) {
   return mode == "Screen Dimmed" || mode == "screen_dimmed" ||
-         mode == "Always On" || mode == "always_on";
+         mode == "Dimmed" || mode == "dimmed" || mode == "dim" ||
+         mode == "Always On" || mode == "always_on" || mode == "always";
 }
 
 inline bool screen_schedule_clock_mode(const std::string &mode) {
   return mode == "Clock" || mode == "clock";
+}
+
+inline bool screen_schedule_sensor_trigger(const std::string &trigger) {
+  return trigger == "Sensor" || trigger == "sensor";
+}
+
+inline bool screen_schedule_sensor_activation_on(
+    const std::string &activation) {
+  return activation == "Sensor On" || activation == "sensor_on" ||
+         activation == "On" || activation == "on";
+}
+
+inline bool screen_schedule_disabled_trigger(const std::string &trigger) {
+  return trigger == "Disabled" || trigger == "disabled" || trigger == "Off" ||
+         trigger == "off";
+}
+
+inline bool screen_schedule_time_trigger(const std::string &trigger) {
+  return !screen_schedule_disabled_trigger(trigger) &&
+         !screen_schedule_sensor_trigger(trigger);
+}
+
+inline bool screen_schedule_waiting_for_time(const std::string &trigger,
+                                             bool enabled,
+                                             bool time_valid) {
+  return enabled && screen_schedule_time_trigger(trigger) && !time_valid;
+}
+
+inline bool screen_schedule_night_active(const std::string &trigger,
+                                         bool enabled,
+                                         bool presence_detected,
+                                         bool time_valid,
+                                         int now_h,
+                                         int on_hour,
+                                         int off_hour,
+                                         const std::string &sensor_activation =
+                                             "Sensor Off") {
+  if (!enabled || screen_schedule_disabled_trigger(trigger)) return false;
+  if (screen_schedule_sensor_trigger(trigger)) {
+    return screen_schedule_sensor_activation_on(sensor_activation)
+               ? presence_detected
+               : !presence_detected;
+  }
+  if (!time_valid) return false;
+  return !screen_schedule_in_window(now_h, on_hour, off_hour);
+}
+
+inline bool screen_schedule_normal_active(const std::string &trigger,
+                                          bool enabled,
+                                          bool presence_detected,
+                                          bool time_valid,
+                                          int now_h,
+                                          int on_hour,
+                                          int off_hour,
+                                          const std::string &sensor_activation =
+                                              "Sensor Off") {
+  if (!enabled || screen_schedule_disabled_trigger(trigger)) return false;
+  if (screen_schedule_sensor_trigger(trigger)) {
+    return screen_schedule_sensor_activation_on(sensor_activation)
+               ? !presence_detected
+               : presence_detected;
+  }
+  if (!time_valid) return false;
+  return screen_schedule_in_window(now_h, on_hour, off_hour);
+}
+
+inline bool screen_schedule_blocks_cover_art(const std::string &trigger,
+                                             bool enabled,
+                                             bool presence_detected,
+                                             bool time_valid,
+                                             int now_h,
+                                             int on_hour,
+                                             int off_hour,
+                                             const std::string &sensor_activation =
+                                                 "Sensor Off") {
+  return screen_schedule_waiting_for_time(trigger, enabled, time_valid) ||
+         screen_schedule_night_active(trigger, enabled, presence_detected,
+                                      time_valid, now_h, on_hour, off_hour,
+                                      sensor_activation);
 }
 
 // ── Screensaver action helpers ────────────────────────────────────────
@@ -198,189 +317,7 @@ inline bool screensaver_action_clock_mode(const std::string &action) {
 
 inline bool screensaver_action_dimmed_mode(const std::string &action) {
   return action == "Screen Dimmed" || action == "screen_dimmed" ||
-         action == "Dimmed" || action == "dimmed";
-}
-
-// ── Temperature label visibility ─────────────────────────────────────
-
-inline void update_temp_label(lv_obj_t *label, lv_obj_t *main_page_obj,
-                              bool this_enabled, bool other_enabled) {
-  char one[12];
-  char both[24];
-  format_clock_bar_temperature_single(one, sizeof(one), "-");
-  format_clock_bar_temperature_pair(both, sizeof(both), "-", "-");
-  if (this_enabled) {
-    if (lv_scr_act() == main_page_obj)
-      lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(label, other_enabled ? both : one);
-  } else if (!other_enabled) {
-    lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_label_set_text(label, one);
-  }
-}
-
-inline void refresh_temp_label_values(lv_obj_t *label, lv_obj_t *main_page_obj,
-                                      bool clock_bar_enabled,
-                                      bool indoor_enabled, bool outdoor_enabled,
-                                      float indoor, float outdoor) {
-  if (!clock_bar_enabled || (!indoor_enabled && !outdoor_enabled)) {
-    lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-    return;
-  }
-
-  if (lv_scr_act() == main_page_obj) lv_obj_clear_flag(label, LV_OBJ_FLAG_HIDDEN);
-
-  char indoor_buf[16];
-  char outdoor_buf[16];
-  if (indoor_enabled) {
-    if (std::isnan(indoor)) snprintf(indoor_buf, sizeof(indoor_buf), "-");
-    else format_fixed_decimal(indoor_buf, sizeof(indoor_buf), indoor, 0);
-  }
-  if (outdoor_enabled) {
-    if (std::isnan(outdoor)) snprintf(outdoor_buf, sizeof(outdoor_buf), "-");
-    else format_fixed_decimal(outdoor_buf, sizeof(outdoor_buf), outdoor, 0);
-  }
-
-  char buf[40];
-  if (indoor_enabled && outdoor_enabled) {
-    format_clock_bar_temperature_pair(buf, sizeof(buf), outdoor_buf, indoor_buf);
-  } else if (outdoor_enabled) {
-    format_clock_bar_temperature_single(buf, sizeof(buf), outdoor_buf);
-  } else {
-    format_clock_bar_temperature_single(buf, sizeof(buf), indoor_buf);
-  }
-  lv_label_set_text(label, buf);
-}
-
-// ── Clock bar layout helpers ────────────────────────────────────────
-
-enum ClockBarItemId {
-  CLOCK_BAR_ITEM_TEMPERATURE = 0,
-  CLOCK_BAR_ITEM_TIME = 1,
-  CLOCK_BAR_ITEM_NETWORK = 2,
-  CLOCK_BAR_ITEM_COUNT = 3,
-};
-
-enum ClockBarSectionId {
-  CLOCK_BAR_SECTION_LEFT = 0,
-  CLOCK_BAR_SECTION_MIDDLE = 1,
-  CLOCK_BAR_SECTION_RIGHT = 2,
-  CLOCK_BAR_SECTION_COUNT = 3,
-};
-
-struct ClockBarParsedLayout {
-  int section[CLOCK_BAR_ITEM_COUNT];
-  int order[CLOCK_BAR_ITEM_COUNT];
-  int count[CLOCK_BAR_SECTION_COUNT];
-};
-
-inline bool clock_bar_token_matches(const char *start, size_t len, const char *value) {
-  size_t value_len = strlen(value);
-  return len == value_len && strncmp(start, value, len) == 0;
-}
-
-inline int clock_bar_section_id(const char *start, size_t len) {
-  if (clock_bar_token_matches(start, len, "left")) return CLOCK_BAR_SECTION_LEFT;
-  if (clock_bar_token_matches(start, len, "middle")) return CLOCK_BAR_SECTION_MIDDLE;
-  if (clock_bar_token_matches(start, len, "right")) return CLOCK_BAR_SECTION_RIGHT;
-  return -1;
-}
-
-inline int clock_bar_item_id(const char *start, size_t len) {
-  if (clock_bar_token_matches(start, len, "temperature")) return CLOCK_BAR_ITEM_TEMPERATURE;
-  if (clock_bar_token_matches(start, len, "time")) return CLOCK_BAR_ITEM_TIME;
-  if (clock_bar_token_matches(start, len, "network")) return CLOCK_BAR_ITEM_NETWORK;
-  return -1;
-}
-
-inline void clock_bar_add_item(ClockBarParsedLayout &layout, int section, int item) {
-  if (section < 0 || section >= CLOCK_BAR_SECTION_COUNT ||
-      item < 0 || item >= CLOCK_BAR_ITEM_COUNT ||
-      layout.section[item] >= 0) {
-    return;
-  }
-  layout.section[item] = section;
-  layout.order[item] = layout.count[section]++;
-}
-
-inline ClockBarParsedLayout parse_clock_bar_layout(const std::string &layout_text) {
-  ClockBarParsedLayout layout;
-  for (int i = 0; i < CLOCK_BAR_ITEM_COUNT; i++) {
-    layout.section[i] = -1;
-    layout.order[i] = 0;
-  }
-  for (int i = 0; i < CLOCK_BAR_SECTION_COUNT; i++) layout.count[i] = 0;
-
-  const char *text = layout_text.c_str();
-  const size_t size = layout_text.size();
-  size_t segment_start = 0;
-
-  while (segment_start <= size) {
-    size_t segment_end = segment_start;
-    while (segment_end < size && text[segment_end] != '|') segment_end++;
-
-    size_t colon = segment_start;
-    while (colon < segment_end && text[colon] != ':') colon++;
-    if (colon < segment_end) {
-      int section = clock_bar_section_id(text + segment_start, colon - segment_start);
-      size_t item_start = colon + 1;
-      while (section >= 0 && item_start <= segment_end) {
-        size_t item_end = item_start;
-        while (item_end < segment_end && text[item_end] != ',') item_end++;
-        int item = clock_bar_item_id(text + item_start, item_end - item_start);
-        clock_bar_add_item(layout, section, item);
-        item_start = item_end + 1;
-      }
-    }
-
-    if (segment_end == size) break;
-    segment_start = segment_end + 1;
-  }
-
-  clock_bar_add_item(layout, CLOCK_BAR_SECTION_LEFT, CLOCK_BAR_ITEM_TEMPERATURE);
-  clock_bar_add_item(layout, CLOCK_BAR_SECTION_MIDDLE, CLOCK_BAR_ITEM_TIME);
-  clock_bar_add_item(layout, CLOCK_BAR_SECTION_RIGHT, CLOCK_BAR_ITEM_NETWORK);
-  return layout;
-}
-
-inline void align_clock_bar_widget(lv_obj_t *obj, int section, int order, int count,
-                                   int left_x, int y, int right_x, int item_gap) {
-  if (!obj) return;
-  if (section == CLOCK_BAR_SECTION_LEFT) {
-    lv_obj_align(obj, LV_ALIGN_TOP_LEFT, left_x + order * item_gap, y);
-  } else if (section == CLOCK_BAR_SECTION_MIDDLE) {
-    int x = ((order * 2) - (count - 1)) * item_gap / 2;
-    lv_obj_align(obj, LV_ALIGN_TOP_MID, x, y);
-  } else {
-    int x = -(right_x + (count - 1 - order) * item_gap);
-    lv_obj_align(obj, LV_ALIGN_TOP_RIGHT, x, y);
-  }
-}
-
-inline void apply_clock_bar_layout(const std::string &layout_text,
-                                   lv_obj_t *temperatures,
-                                   lv_obj_t *display_time,
-                                   lv_obj_t *network_status_button,
-                                   int left_x, int label_y,
-                                   int right_x, int network_y,
-                                   int item_gap) {
-  ClockBarParsedLayout layout = parse_clock_bar_layout(layout_text);
-  align_clock_bar_widget(temperatures,
-                         layout.section[CLOCK_BAR_ITEM_TEMPERATURE],
-                         layout.order[CLOCK_BAR_ITEM_TEMPERATURE],
-                         layout.count[layout.section[CLOCK_BAR_ITEM_TEMPERATURE]],
-                         left_x, label_y, right_x, item_gap);
-  align_clock_bar_widget(display_time,
-                         layout.section[CLOCK_BAR_ITEM_TIME],
-                         layout.order[CLOCK_BAR_ITEM_TIME],
-                         layout.count[layout.section[CLOCK_BAR_ITEM_TIME]],
-                         left_x, label_y, right_x, item_gap);
-  align_clock_bar_widget(network_status_button,
-                         layout.section[CLOCK_BAR_ITEM_NETWORK],
-                         layout.order[CLOCK_BAR_ITEM_NETWORK],
-                         layout.count[layout.section[CLOCK_BAR_ITEM_NETWORK]],
-                         left_x, network_y, right_x, item_gap);
+         action == "Dimmed" || action == "dimmed" || action == "dim";
 }
 
 // ── Screensaver layout helpers ──────────────────────────────────────
@@ -450,3 +387,5 @@ inline bool should_check_update(int counter, const std::string &freq) {
   else if (freq == "Monthly") threshold = 720;
   return counter % threshold == 0;
 }
+
+#endif  // ESPCONTROL_BACKLIGHT_H

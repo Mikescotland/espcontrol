@@ -30,6 +30,24 @@ inline void set_width_compensation_vertical_axis(bool vertical) {
   width_compensation_vertical_axis() = vertical;
 }
 
+inline int &icon_width_compensation_percent() {
+  static int percent = 100;
+  return percent;
+}
+
+inline void set_icon_width_compensation_percent(int percent) {
+  icon_width_compensation_percent() = normalize_width_compensation_percent(percent);
+}
+
+inline int &text_width_compensation_percent() {
+  static int percent = 100;
+  return percent;
+}
+
+inline void set_text_width_compensation_percent(int percent) {
+  text_width_compensation_percent() = normalize_width_compensation_percent(percent);
+}
+
 inline lv_coord_t compensated_width(lv_coord_t width, int percent) {
   if (width_compensation_vertical_axis()) return width;
   percent = normalize_width_compensation_percent(percent);
@@ -43,10 +61,24 @@ inline void apply_width_compensation(lv_obj_t *obj, int percent) {
   lv_obj_set_style_transform_scale_y(obj, width_compensation_vertical_axis() ? scale : 256, LV_PART_MAIN);
 }
 
+inline void apply_text_width_compensation(lv_obj_t *obj) {
+  apply_width_compensation(obj, text_width_compensation_percent());
+}
+
+inline void apply_icon_width_compensation(lv_obj_t *obj, int zoom = 256) {
+  if (!obj) return;
+  int compensated_zoom = zoom * icon_width_compensation_percent() / 100;
+  lv_obj_set_style_transform_scale_x(
+    obj, width_compensation_vertical_axis() ? zoom : compensated_zoom, LV_PART_MAIN);
+  lv_obj_set_style_transform_scale_y(
+    obj, width_compensation_vertical_axis() ? compensated_zoom : zoom, LV_PART_MAIN);
+}
+
 inline void apply_slot_text_width_compensation(const BtnSlot &s, int percent) {
-  apply_width_compensation(s.text_lbl, percent);
-  apply_width_compensation(s.sensor_container, percent);
-  apply_width_compensation(s.subpage_lbl, percent);
+  (void) percent;
+  apply_text_width_compensation(s.text_lbl);
+  apply_text_width_compensation(s.sensor_container);
+  apply_text_width_compensation(s.subpage_lbl);
 }
 
 // ── Grid layout parsing ───────────────────────────────────────────────
@@ -58,19 +90,117 @@ struct OrderResult {
   int col_span[MAX_GRID_SLOTS] = {};     // number of grid columns used by each slot
 };
 
+constexpr int CARD_SIZE_SINGLE_ROW_SPAN = 1;
+constexpr int CARD_SIZE_SINGLE_COL_SPAN = 1;
+constexpr char CARD_SIZE_TALL_TOKEN = 'd';
+constexpr int CARD_SIZE_TALL_ROW_SPAN = 2;
+constexpr int CARD_SIZE_TALL_COL_SPAN = 1;
+constexpr char CARD_SIZE_WIDE_TOKEN = 'w';
+constexpr int CARD_SIZE_WIDE_ROW_SPAN = 1;
+constexpr int CARD_SIZE_WIDE_COL_SPAN = 2;
+constexpr char CARD_SIZE_LARGE_TOKEN = 'b';
+constexpr int CARD_SIZE_LARGE_ROW_SPAN = 2;
+constexpr int CARD_SIZE_LARGE_COL_SPAN = 2;
+constexpr char CARD_SIZE_EXTRA_TALL_TOKEN = 't';
+constexpr int CARD_SIZE_EXTRA_TALL_ROW_SPAN = 3;
+constexpr int CARD_SIZE_EXTRA_TALL_COL_SPAN = 1;
+constexpr char CARD_SIZE_EXTRA_WIDE_TOKEN = 'x';
+constexpr int CARD_SIZE_EXTRA_WIDE_ROW_SPAN = 1;
+constexpr int CARD_SIZE_EXTRA_WIDE_COL_SPAN = 3;
+constexpr char CARD_SIZE_EXTRA_LARGE_TOKEN = 'q';
+constexpr int CARD_SIZE_EXTRA_LARGE_ROW_SPAN = 3;
+constexpr int CARD_SIZE_EXTRA_LARGE_COL_SPAN = 3;
+constexpr char CARD_SIZE_MAX_WIDE_TOKEN = 'h';
+constexpr int CARD_SIZE_MAX_WIDE_ROW_SPAN = 2;
+constexpr int CARD_SIZE_MAX_WIDE_COL_SPAN = 3;
+constexpr char CARD_SIZE_MAX_TALL_TOKEN = 'v';
+constexpr int CARD_SIZE_MAX_TALL_ROW_SPAN = 3;
+constexpr int CARD_SIZE_MAX_TALL_COL_SPAN = 2;
+constexpr char CARD_SIZE_PORTRAIT_LARGE_TOKEN = 'p';
+constexpr int CARD_SIZE_PORTRAIT_LARGE_ROW_SPAN = 4;
+constexpr int CARD_SIZE_PORTRAIT_LARGE_COL_SPAN = 3;
+constexpr char CARD_SIZE_LANDSCAPE_LARGE_TOKEN = 'l';
+constexpr int CARD_SIZE_LANDSCAPE_LARGE_ROW_SPAN = 3;
+constexpr int CARD_SIZE_LANDSCAPE_LARGE_COL_SPAN = 4;
+constexpr char CARD_SIZE_ULTRA_WIDE_TOKEN = 'u';
+constexpr int CARD_SIZE_ULTRA_WIDE_ROW_SPAN = 1;
+constexpr int CARD_SIZE_ULTRA_WIDE_COL_SPAN = 5;
+
+inline bool card_span_matches(int row_span, int col_span, int expected_rows, int expected_cols) {
+  return row_span == expected_rows && col_span == expected_cols;
+}
+
+inline bool card_span_is_single(int row_span, int col_span) {
+  return card_span_matches(row_span, col_span, CARD_SIZE_SINGLE_ROW_SPAN, CARD_SIZE_SINGLE_COL_SPAN);
+}
+
+inline bool card_span_is_wide(int row_span, int col_span) {
+  return card_span_matches(row_span, col_span, CARD_SIZE_WIDE_ROW_SPAN, CARD_SIZE_WIDE_COL_SPAN);
+}
+
+inline bool card_span_is_large(int row_span, int col_span) {
+  return card_span_matches(row_span, col_span, CARD_SIZE_LARGE_ROW_SPAN, CARD_SIZE_LARGE_COL_SPAN);
+}
+
 inline void grid_token_spans(char suffix, int &row_span, int &col_span) {
-  row_span = 1;
-  col_span = 1;
-  if (suffix == 'd') row_span = 2;
-  else if (suffix == 'w') col_span = 2;
-  else if (suffix == 'b') { row_span = 2; col_span = 2; }
-  else if (suffix == 't') row_span = 3;
-  else if (suffix == 'x') col_span = 3;
+  row_span = CARD_SIZE_SINGLE_ROW_SPAN;
+  col_span = CARD_SIZE_SINGLE_COL_SPAN;
+  if (suffix == CARD_SIZE_TALL_TOKEN) {
+    row_span = CARD_SIZE_TALL_ROW_SPAN;
+    col_span = CARD_SIZE_TALL_COL_SPAN;
+  } else if (suffix == CARD_SIZE_WIDE_TOKEN) {
+    row_span = CARD_SIZE_WIDE_ROW_SPAN;
+    col_span = CARD_SIZE_WIDE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_LARGE_TOKEN) {
+    row_span = CARD_SIZE_LARGE_ROW_SPAN;
+    col_span = CARD_SIZE_LARGE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_EXTRA_TALL_TOKEN) {
+    row_span = CARD_SIZE_EXTRA_TALL_ROW_SPAN;
+    col_span = CARD_SIZE_EXTRA_TALL_COL_SPAN;
+  } else if (suffix == CARD_SIZE_EXTRA_WIDE_TOKEN) {
+    row_span = CARD_SIZE_EXTRA_WIDE_ROW_SPAN;
+    col_span = CARD_SIZE_EXTRA_WIDE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_EXTRA_LARGE_TOKEN) {
+    row_span = CARD_SIZE_EXTRA_LARGE_ROW_SPAN;
+    col_span = CARD_SIZE_EXTRA_LARGE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_MAX_WIDE_TOKEN) {
+    row_span = CARD_SIZE_MAX_WIDE_ROW_SPAN;
+    col_span = CARD_SIZE_MAX_WIDE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_MAX_TALL_TOKEN) {
+    row_span = CARD_SIZE_MAX_TALL_ROW_SPAN;
+    col_span = CARD_SIZE_MAX_TALL_COL_SPAN;
+  } else if (suffix == CARD_SIZE_PORTRAIT_LARGE_TOKEN) {
+    row_span = CARD_SIZE_PORTRAIT_LARGE_ROW_SPAN;
+    col_span = CARD_SIZE_PORTRAIT_LARGE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_LANDSCAPE_LARGE_TOKEN) {
+    row_span = CARD_SIZE_LANDSCAPE_LARGE_ROW_SPAN;
+    col_span = CARD_SIZE_LANDSCAPE_LARGE_COL_SPAN;
+  } else if (suffix == CARD_SIZE_ULTRA_WIDE_TOKEN) {
+    row_span = CARD_SIZE_ULTRA_WIDE_ROW_SPAN;
+    col_span = CARD_SIZE_ULTRA_WIDE_COL_SPAN;
+  }
 }
 
 inline bool grid_token_has_span_suffix(char suffix) {
-  return suffix == 'd' || suffix == 'w' || suffix == 'b' ||
-    suffix == 't' || suffix == 'x';
+  return suffix == CARD_SIZE_TALL_TOKEN || suffix == CARD_SIZE_WIDE_TOKEN ||
+    suffix == CARD_SIZE_LARGE_TOKEN || suffix == CARD_SIZE_EXTRA_TALL_TOKEN ||
+    suffix == CARD_SIZE_EXTRA_WIDE_TOKEN || suffix == CARD_SIZE_EXTRA_LARGE_TOKEN ||
+    suffix == CARD_SIZE_MAX_WIDE_TOKEN || suffix == CARD_SIZE_MAX_TALL_TOKEN ||
+    suffix == CARD_SIZE_PORTRAIT_LARGE_TOKEN || suffix == CARD_SIZE_LANDSCAPE_LARGE_TOKEN ||
+    suffix == CARD_SIZE_ULTRA_WIDE_TOKEN;
+}
+
+inline int parse_positive_int_span(const std::string &value, size_t start, size_t end) {
+  while (start < end && std::isspace(static_cast<unsigned char>(value[start]))) start++;
+  int result = 0;
+  bool has_digit = false;
+  for (size_t i = start; i < end; i++) {
+    char ch = value[i];
+    if (ch < '0' || ch > '9') break;
+    has_digit = true;
+    result = result * 10 + (ch - '0');
+  }
+  return has_digit ? result : 0;
 }
 
 // Parse "1,2d,3w,4b,5t,6x,..." into positions + row/column spans
@@ -87,13 +217,16 @@ inline void parse_order_string(const std::string &order_str, int num_slots, Orde
     size_t comma = order_str.find(',', start);
     if (comma == std::string::npos) comma = order_str.length();
     if (comma > start) {
-      std::string token = order_str.substr(start, comma - start);
+      size_t token_end = comma;
       int row_span = 1, col_span = 1;
-      if (!token.empty() && grid_token_has_span_suffix(token.back())) {
-        grid_token_spans(token.back(), row_span, col_span);
-        token.pop_back();
+      while (token_end > start && std::isspace(static_cast<unsigned char>(order_str[token_end - 1]))) {
+        token_end--;
       }
-      int v = atoi(token.c_str());
+      if (token_end > start && grid_token_has_span_suffix(order_str[token_end - 1])) {
+        grid_token_spans(order_str[token_end - 1], row_span, col_span);
+        token_end--;
+      }
+      int v = parse_positive_int_span(order_str, start, token_end);
       if (v >= 1 && v <= slot_limit) {
         result.positions[gpos] = v;
         result.row_span[v - 1] = row_span;
@@ -102,6 +235,31 @@ inline void parse_order_string(const std::string &order_str, int num_slots, Orde
     }
     gpos++;
     start = comma + 1;
+  }
+}
+
+// Saved layouts can originate on a larger display or an older web editor.
+// Downgrade any card that extends beyond the active grid before passing its
+// cell coordinates to LVGL.
+inline void normalize_grid_span_for_position(int position, int num_slots,
+                                             int cols, int &row_span,
+                                             int &col_span) {
+  int slot_limit = bounded_grid_slots(num_slots);
+  if (position < 0 || position >= slot_limit || cols <= 0) {
+    row_span = 1;
+    col_span = 1;
+    return;
+  }
+  if (row_span < 1) row_span = 1;
+  if (col_span < 1) col_span = 1;
+  int rows = (slot_limit + cols - 1) / cols;
+  int row = position / cols;
+  int col = position % cols;
+  int last_cell = position + (row_span - 1) * cols + col_span - 1;
+  if (row + row_span > rows || col + col_span > cols ||
+      last_cell >= slot_limit) {
+    row_span = 1;
+    col_span = 1;
   }
 }
 
@@ -118,6 +276,9 @@ inline void clear_spanned_cells(const OrderResult &order, int num_slots, int col
     int idx = result.positions[p] - 1;
     int row_span = result.row_span[idx] > 0 ? result.row_span[idx] : 1;
     int col_span = result.col_span[idx] > 0 ? result.col_span[idx] : 1;
+    normalize_grid_span_for_position(p, slot_limit, cols, row_span, col_span);
+    result.row_span[idx] = row_span;
+    result.col_span[idx] = col_span;
     int col = p % cols;
     for (int r = 0; r < row_span; r++) {
       for (int c = 0; c < col_span; c++) {
@@ -128,6 +289,71 @@ inline void clear_spanned_cells(const OrderResult &order, int num_slots, int col
       }
     }
   }
+}
+
+inline lv_coord_t grid_div_round_closest(lv_coord_t dividend, int divisor) {
+  if (divisor <= 0) return 0;
+  return (dividend + divisor / 2) / divisor;
+}
+
+inline lv_coord_t grid_equal_fr_track_size(lv_coord_t usable, int track_count, int track_index) {
+  if (track_count < 1) track_count = 1;
+  if (track_index < 0) track_index = 0;
+  if (track_index >= track_count) track_index = track_count - 1;
+  lv_coord_t remaining_usable = usable;
+  int remaining_tracks = track_count;
+  for (int i = 0; i < track_count; i++) {
+    lv_coord_t size = grid_div_round_closest(remaining_usable, remaining_tracks);
+    if (i == track_index) return size;
+    remaining_usable -= size;
+    remaining_tracks--;
+  }
+  return 0;
+}
+
+inline lv_coord_t grid_track_span_size(lv_coord_t total_size,
+                                       lv_coord_t pad_start,
+                                       lv_coord_t pad_end,
+                                       lv_coord_t gap,
+                                       int track_count,
+                                       int start,
+                                       int span) {
+  if (track_count < 1) track_count = 1;
+  if (start < 0) start = 0;
+  if (start >= track_count) start = track_count - 1;
+  if (span < 1) span = 1;
+  if (span > track_count - start) span = track_count - start;
+  lv_coord_t usable = total_size - pad_start - pad_end - gap * (track_count - 1);
+  if (usable <= 0) return 0;
+  lv_coord_t size = gap * (span - 1);
+  for (int offset = 0; offset < span; offset++) {
+    size += grid_equal_fr_track_size(usable, track_count, start + offset);
+  }
+  return size;
+}
+
+inline void set_grid_card_cell(lv_obj_t *btn,
+                               lv_obj_t *grid,
+                               int col,
+                               int row,
+                               int col_span,
+                               int row_span,
+                               int cols,
+                               int rows) {
+  if (!btn) return;
+  if (col_span < 1) col_span = 1;
+  if (row_span < 1) row_span = 1;
+  lv_grid_align_t col_align = col_span > 1 ? LV_GRID_ALIGN_START : LV_GRID_ALIGN_STRETCH;
+  lv_grid_align_t row_align = row_span > 1 ? LV_GRID_ALIGN_START : LV_GRID_ALIGN_STRETCH;
+  lv_obj_set_grid_cell(btn, col_align, col, col_span, row_align, row, row_span);
+
+  if (!grid) return;
+  if (card_span_is_single(row_span, col_span)) {
+    clock_bar_unregister_responsive_grid_card(btn);
+    return;
+  }
+  clock_bar_register_responsive_grid_card(
+    grid, btn, col, row, col_span, row_span, cols, rows);
 }
 
 // ── Button visuals ────────────────────────────────────────────────────
@@ -211,7 +437,7 @@ inline void configure_button_label_wrap(lv_obj_t *label) {
 inline void set_wrapped_button_label_text(lv_obj_t *label, const std::string &text) {
   if (!label) return;
   configure_button_label_wrap(label);
-  lv_label_set_text(label, text.c_str());
+  lv_label_set_display_text(label, text.c_str());
   lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 

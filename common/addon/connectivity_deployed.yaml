@@ -10,11 +10,13 @@ wifi:
   reboot_timeout: 30min
   on_connect:
     - script.execute: network_status_refresh
+    - script.execute: ntp_servers_apply_after_network
+    - lambda: 'id(espcontrol_app).home_assistant_endpoint().request_discovery();'
     - script.stop: wifi_reconnect_flow
-    - script.stop: setup_screen_dim
+    - script.execute: setup_screen_dim_cancel
     - lambda: |-
         ESP_LOGI("connectivity", "WiFi connected (%lu ms)", millis());
-        lv_label_set_text(id(loading_status_label), "Connected");
+        lv_label_set_text(id(loading_status_label), espcontrol_i18n("Connected"));
     - delay: 200ms
     - if:
         condition:
@@ -26,70 +28,65 @@ wifi:
               condition:
                 lambda: 'return id(button_order).state.empty();'
               then:
+                - script.execute: clock_bar_hide
                 - lvgl.page.show: ha_setup_page
                 - script.execute: setup_screen_dim
               else:
                 - script.execute: navigate_after_api
   on_disconnect:
     - script.execute: network_status_refresh
+    - lambda: |-
+        id(cover_art_home_assistant_client_address).clear();
+        id(cover_art_resolve_home_assistant_base_url).execute();
     - if:
         condition:
           lambda: 'return !id(boot_grace_period);'
         then:
           - script.execute: wifi_reconnect_flow
 
-api:
-  on_client_connected:
-    - delay: 2s
-    - if:
-        condition:
-          lambda: 'return ha_api_state_connected();'
-        then:
-          - if:
-              condition:
-                lambda: 'return lv_scr_act() == id(ha_setup_page)->obj;'
-              then:
-                - script.stop: setup_screen_dim
-                - lvgl.page.show: ha_actions_page
-              else:
-                - script.execute: navigate_after_api
-
 script:
+  - id: ha_restore_after_api
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return ha_api_connected();'
+          then:
+            - if:
+                condition:
+                  lambda: 'return lv_scr_act() == id(ha_setup_page)->obj;'
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return id(button_order).state.empty();'
+                      then:
+                        - script.execute: setup_screen_dim_cancel
+                        - script.execute: clock_bar_hide
+                        - lvgl.page.show: ha_actions_page
+                      else:
+                        - script.execute: navigate_after_api
+
   - id: wifi_show_reconnecting
     mode: restart
     then:
-      - lvgl.widget.update:
-          id: temperatures
-          hidden: true
-      - lvgl.widget.update:
-          id: display_time
-          hidden: true
-      - lvgl.widget.update:
-          id: network_status_button
-          hidden: true
+      - script.execute: clock_bar_hide
       - lambda: |-
-          network_status_hide_modal();
-          lv_label_set_text(id(wifi_setup_title), "WiFi Disconnected");
-          lv_label_set_text(id(wifi_setup_instructions), "Trying to reconnect\nto your saved network");
+          lv_label_set_text(id(wifi_setup_title), espcontrol_i18n("WiFi Disconnected"));
+          lv_label_set_text(
+              id(wifi_setup_instructions),
+              espcontrol_i18n("Trying to reconnect\nto your saved network"));
       - lvgl.page.show: wifi_setup_page
       - script.execute: setup_screen_dim
 
   - id: wifi_show_hotspot_setup
     mode: restart
     then:
-      - lvgl.widget.update:
-          id: temperatures
-          hidden: true
-      - lvgl.widget.update:
-          id: display_time
-          hidden: true
-      - lvgl.widget.update:
-          id: network_status_button
-          hidden: true
+      - script.execute: clock_bar_hide
       - lambda: |-
-          network_status_hide_modal();
-          lv_label_set_text(id(wifi_setup_title), "WiFi Disconnected");
-          lv_label_set_text(id(wifi_setup_instructions), "No saved WiFi connection\nReinstall by USB to reconfigure");
+          lv_label_set_text(id(wifi_setup_title), espcontrol_i18n("WiFi Disconnected"));
+          lv_label_set_text(
+              id(wifi_setup_instructions),
+              espcontrol_i18n("No saved WiFi connection\nReinstall by USB to reconfigure"));
       - lvgl.page.show: wifi_setup_page
       - script.execute: setup_screen_dim
 
@@ -107,11 +104,16 @@ script:
   - id: navigate_after_api
     mode: restart
     then:
-      - script.stop: setup_screen_dim
+      - script.execute: setup_screen_dim_cancel
       - if:
           condition:
             lambda: 'return !id(button_order).state.empty();'
           then:
+            - wait_until:
+                condition:
+                  lambda: |-
+                    return id(espcontrol_app).display().target_mode_is(
+                        espcontrol::DisplayMode::ACTIVE);
             - lvgl.page.show: main_page
             - script.execute: clock_bar_apply
             - script.execute: screensaver_idle_check
@@ -124,5 +126,6 @@ script:
                   std::string url = "http://" + std::string(ip_buf);
                   lv_label_set_text(id(setup_ip_label), url.c_str());
                 }
+            - script.execute: clock_bar_hide
             - lvgl.page.show: button_setup_page
             - script.execute: setup_screen_dim
